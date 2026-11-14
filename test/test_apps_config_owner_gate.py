@@ -12,6 +12,9 @@ Caller rows, through the production route order (``system.register``):
 * the app's own token: 200, written (``token_auth`` scoped it to its own path);
 * a foreign app's token: refused by ``token_auth`` unless its manifest grants the
   path; with a grant it is let through like the app's own token.
+
+A GET carries the file's ``ETag``; a PUT whose ``If-Match`` differs from the file's
+current tag is 412 ``config_changed`` with the file untouched.
 """
 
 from __future__ import annotations
@@ -136,3 +139,69 @@ async def test_foreign_app_token_needs_a_manifest_grant(
     status, payload = await _put(_app(user=foreign, app_claim=foreign), _PLANTED)
     assert status == 200, payload
     assert json.loads(config_path.read_text(encoding="utf-8")) == _PLANTED
+
+
+async def test_successful_answers_carry_the_host_marker_and_errors_do_not(
+    config_path: Path,
+) -> None:
+    from kiro_crew.app_lifecycle_client import APP_CONFIG_MARKER
+
+    header, value = APP_CONFIG_MARKER
+    async with TestClient(TestServer(_app(user=OWNER))) as client:
+        read = await client.get(PATH)
+        assert (read.status, read.headers.get(header)) == (200, value)
+        written = await client.put(PATH, json=_PLANTED)
+        assert (written.status, written.headers.get(header)) == (200, value)
+        refused = await client.put(PATH, json=[1])
+        assert refused.status == 400
+        assert header not in refused.headers
+        config_path.unlink()
+        seeded = await client.get(PATH)
+        assert (seeded.status, await seeded.json(), seeded.headers.get(header)) == (200, {}, value)
+
+
+def _etag(raw: bytes) -> str:
+    from kiro_crew.dashboard.conditional_get import strong_content_etag
+
+    return strong_content_etag(raw)
+
+
+async def test_get_etag_is_the_sha256_of_the_file_bytes(config_path: Path) -> None:
+    async with TestClient(TestServer(_app(user=OWNER))) as client:
+        read = await client.get(PATH)
+        assert read.headers.get("ETag") == _etag(config_path.read_bytes())
+        config_path.unlink()
+        seeded = await client.get(PATH)
+        assert seeded.headers.get("ETag") == _etag(config_path.read_bytes()) == _etag(b"{}\n")
+
+
+async def test_a_put_with_a_stale_if_match_is_refused_and_keeps_the_newer_write(
+    config_path: Path,
+) -> None:
+    from kiro_crew.app_lifecycle_client import APP_CONFIG_MARKER
+
+    async with TestClient(TestServer(_app(user=OWNER))) as client:
+        tag = (await client.get(PATH)).headers["ETag"]
+        first = await client.put(PATH, json={**_OWNER_CONFIG, "a": 1}, headers={"If-Match": tag})
+        assert first.status == 200, await first.json()
+        stale = await client.put(PATH, json={**_OWNER_CONFIG, "b": 2}, headers={"If-Match": tag})
+        assert (stale.status, (await stale.json()).get("code")) == (412, "config_changed")
+        assert APP_CONFIG_MARKER[0] not in stale.headers
+        assert json.loads(config_path.read_text(encoding="utf-8")) == {**_OWNER_CONFIG, "a": 1}
+        unconditional = await client.put(PATH, json=_PLANTED)
+        assert unconditional.status == 200
+        assert json.loads(config_path.read_text(encoding="utf-8")) == _PLANTED
+
+
+async def test_a_write_that_lands_before_the_seed_is_what_the_get_answers(
+    config_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A PUT between the GET's missing-file check and its seed: body and tag are that write's."""
+    is_file = Path.is_file
+    monkeypatch.setattr(
+        Path, "is_file", lambda self, **kw: self != config_path and is_file(self, **kw)
+    )
+    async with TestClient(TestServer(_app(user=OWNER))) as client:
+        read = await client.get(PATH)
+        assert (read.status, await read.json()) == (200, _OWNER_CONFIG)
+        assert read.headers.get("ETag") == _etag(config_path.read_bytes())
