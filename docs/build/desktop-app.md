@@ -870,7 +870,7 @@ path, and a gateway that answers inside the window is reused as before.
 
 With no gateway to reuse, the shell locates the backend binary via
 [`find-bin.js`](../../website/electron/find-bin.js), spawns it as `kirocrew
-gateway --no-open`, polls `/api/status`, and loads the dashboard once it is
+gateway --no-open`, polls `/api/live`, and loads the dashboard once it is
 healthy.
 
 The gateway's stdout and stderr go to `gateway-launch.log`. Off Windows the shell
