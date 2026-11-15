@@ -531,6 +531,7 @@ class _RunContext:
         self._prefix_rerun = replay_before > 0
         self._root_scope = _CallScope(self, ())
         self._failed_task_logs = 0
+        self._refusal_logs = 0
         self._budget_watch = BudgetWatch(budget.total, run_id=run_id)
         # call_index → why that call failed (bounded/redacted). Kept alongside
         # agent_results so "no result" is always accompanied by a reason.
@@ -683,8 +684,17 @@ class _RunContext:
                 # Structured output (C1–C3): re-ask until the model yields
                 # schema-valid JSON, or None after bounded retries. The producer
                 # is the same injected agent_fn (so prod/stub both flow through).
+                # Its text is what the schema validates, so a person-only directive
+                # refused in a turn that returns reaches the run's stream through
+                # ``_on_refusal`` instead (``agent_exec.step_text``). Added after
+                # the fingerprint, so a replay still matches.
+                step_opts = {
+                    **opts,
+                    "_on_refusal": lambda t: self._log_refusal(agent_id, call_label, t),
+                }
+
                 async def _produce(p: str) -> str:
-                    out = await self._agent_fn(p, opts)
+                    out = await self._agent_fn(p, step_opts)
                     text = out if isinstance(out, str) else json.dumps(out)
                     # Each re-ask is its own model turn: meter the prompt it sent.
                     self._note_spend(p, text)
@@ -809,9 +819,9 @@ class _RunContext:
 
         return await _pipeline(items, *[in_chain(s) for s in stages], limit=self._concurrency)
 
-    # Failed-task log events per run: enough to explain the failures, few enough
-    # that a pipeline over thousands of bad items cannot flood the event stream
-    # and the checkpoints that re-serialize it.
+    # Failed-task log events per run, and refused-directive ones (counted apart):
+    # enough to explain them, few enough that a pipeline over thousands of bad
+    # items cannot flood the event stream and the checkpoints that re-serialize it.
     _FAILED_TASK_LOG_LIMIT = 20
 
     def _note_spend(self, prompt: Any, result: Any) -> None:
@@ -828,6 +838,17 @@ class _RunContext:
         message = f"{where} {index} failed: {describe_agent_error(exc)}"
         if self._failed_task_logs == self._FAILED_TASK_LOG_LIMIT:
             message += " (further failed tasks in this run are not logged)"
+        self._record(self._stream.log(self.now, message=message))
+
+    def _log_refusal(self, agent_id: str, label: str, refusal: str) -> None:
+        # A ``schema=`` step's refused person-only directive; the SEL row the
+        # refusal wrote records every one, past the cap too.
+        self._refusal_logs += 1
+        if self._refusal_logs > self._FAILED_TASK_LOG_LIMIT:
+            return
+        message = f'agent {agent_id} "{label}": {refusal}'
+        if self._refusal_logs == self._FAILED_TASK_LOG_LIMIT:
+            message += " (further refusals in this run are not logged)"
         self._record(self._stream.log(self.now, message=message))
 
     def _scope(self) -> _CallScope:
