@@ -76,9 +76,11 @@ from kiro_crew.subagent_persistence_layout import (
     logger,
     publish_live_cleanup_hint,
     publish_live_cleanup_identity,
+    read_run_worktree_record,
     remember_live_cleanup_identity,
     subagent_id_from_conversation_key,
     trusted_cleanup_identity_record,
+    write_run_worktree_record,
 )
 from kiro_crew.subagent_persistence_state import (
     RetentionPromotionResult,
@@ -917,6 +919,12 @@ def prune_stale_tombstones(
                             # fault, and is tried again on every sweep.
                             _UNRECLAIMABLE_MEMO[d.name] = (evidence, retry_until)
                         continue
+                    # An isolated run's worktree goes when its retention does,
+                    # read from the protected record before that is deleted
+                    # below; a kept or failed one never holds the prune back.
+                    from kiro_crew.subagent_worktree import remove_recorded_worktree
+
+                    remove_recorded_worktree(d.name, identity_reader.read_run_worktree(d.name))
                     shutil.rmtree(d, ignore_errors=True)
                     if not d.exists():
                         with _CLEANUP_IDENTITY_LOCK:
@@ -1062,6 +1070,8 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
     from kiro_crew.subagent_persistence_layout import (  # noqa: F401
         _CLEANUP_IDENTITIES_FILE,
         _CLEANUP_IDENTITIES_TRUST_DIR,
+        _RUN_WORKTREE_BASE_RE,
+        _RUN_WORKTREE_FILE,
         _SUBAGENTS_DIR,
         _agent_dir_under,
         _atomic_write,
@@ -1070,6 +1080,7 @@ if TYPE_CHECKING:  # every owner-defined name in _EXPORTS, for type checkers and
         _lock_down_cleanup_dir,
         _lock_down_cleanup_file,
         _parse_cleanup_identities_file,
+        _parse_run_worktree_file,
         _protect_cleanup_identities_path,
     )
     from kiro_crew.subagent_persistence_state import (  # noqa: F401

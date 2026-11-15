@@ -1357,30 +1357,44 @@ class ContinuationCoordinator(ManagerComponent):
         from ..agent_sdk.claude_transcripts import is_claude_provider_label
         from ..agent_sdk.codex_transcripts import is_codex_provider_label
         from ..subagent import _cleanup_session_files_sync, logger, update_state
+        from ..subagent_persistence import read_run_worktree_record
+        from ..subagent_worktree import remove_recorded_worktree
 
         try:
             update_state(conv_id, keep=False)
         except Exception:
             logger.debug("release: failed to demote state for %s", conv_id, exc_info=True)
-        if not sid:
-            return True
+        # An isolated run's worktree (``spawn_run`` ``isolate``) goes with the
+        # release, after the provider cleanup, and only while it is clean. Read
+        # from the gateway's protected record here, before a run with no session
+        # returns, so that run's worktree is not left behind either.
+        worktree = read_run_worktree_record(conv_id)
         try:
-            if is_claude_provider_label(provider_label) or is_codex_provider_label(provider_label):
-                # Claude Code files a transcript under its working directory, and
-                # codex under the CODEX_HOME its child ran with, so each delete
-                # needs what the gateway recorded for this session.
-                from ..subagent_persistence import trusted_cleanup_identity_record
+            if not sid:
+                return True
+            try:
+                if is_claude_provider_label(provider_label) or is_codex_provider_label(
+                    provider_label
+                ):
+                    # Claude Code files a transcript under its working directory, and
+                    # codex under the CODEX_HOME its child ran with, so each delete
+                    # needs what the gateway recorded for this session.
+                    from ..subagent_persistence import trusted_cleanup_identity_record
 
-                record = trusted_cleanup_identity_record(conv_id, sid, f"subagent:{conv_id}")
-                cwd = str((record or {}).get("cwd") or "")
-                codex_home = str((record or {}).get("codex_home") or "")
-                return bool(
-                    _cleanup_session_files_sync(sid, provider_label, cwd=cwd, codex_home=codex_home)
-                )
-            return bool(_cleanup_session_files_sync(sid, provider_label))
-        except Exception:
-            logger.debug("release_conversation: file cleanup failed", exc_info=True)
-            return False
+                    record = trusted_cleanup_identity_record(conv_id, sid, f"subagent:{conv_id}")
+                    cwd = str((record or {}).get("cwd") or "")
+                    codex_home = str((record or {}).get("codex_home") or "")
+                    return bool(
+                        _cleanup_session_files_sync(
+                            sid, provider_label, cwd=cwd, codex_home=codex_home
+                        )
+                    )
+                return bool(_cleanup_session_files_sync(sid, provider_label))
+            except Exception:
+                logger.debug("release_conversation: file cleanup failed", exc_info=True)
+                return False
+        finally:
+            remove_recorded_worktree(conv_id, worktree)
 
     def release_conversation_impl(self, conv_id: str) -> tuple[bool, str]:
         """Release conversation *conv_id*: forget the sid and delete files.

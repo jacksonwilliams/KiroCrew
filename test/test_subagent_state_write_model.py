@@ -76,6 +76,15 @@ _WRITE_SITES: dict[tuple[str, str, str], tuple[int, str]] = {
         "holds the conversation until the worker lands; inherits the per-agent lock",
     ),
     (
+        "kiro_crew/subagent_worktree.py",
+        "prepare_run_worktree",
+        "update_state",
+    ): (
+        1,
+        "off loop: its one caller (run_turn) runs it in asyncio.to_thread before the "
+        "run's session exists; inherits the per-agent lock",
+    ),
+    (
         "kiro_crew/subagent_persistence_state.py",
         "create_agent_folder",
         "update_execution_context",
