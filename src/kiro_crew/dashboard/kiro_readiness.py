@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import time
 from typing import TYPE_CHECKING
 
@@ -359,8 +360,10 @@ async def kas_crew_signin_ready(
     and refreshes it under the identity's lock, the same call that answers the
     engine's ``_kiro/auth/getAccessToken``. A rejected or unattemptable refresh,
     or no stored identity, answers False, so a destructive rerun is still
-    refused before history is rewritten. Fresh on every call: there is no latch
-    to go stale. Never raises.
+    refused before history is rewritten -- unless ``agent.kas_api_key_sign_in``
+    has the engine sign in with ``KIRO_API_KEY`` instead
+    (:func:`kiro_crew.auth.bridge.api_key_sign_in_applies`). Fresh on every call:
+    there is no latch to go stale. Never raises.
     """
     from kiro_crew import workload_identity
 
@@ -380,9 +383,12 @@ async def kas_crew_signin_ready(
     try:
         # Deferred: kiro_crew.auth pulls the ``cryptography`` wheel, which must
         # not load on the handlers' import path (see kiro_crew.acp.kas_host_auth).
-        from kiro_crew.auth.bridge import default_token_store
+        from kiro_crew.auth.bridge import api_key_sign_in_applies, default_token_store
         from kiro_crew.auth.provider import KasAuthProvider
 
+        if await asyncio.to_thread(api_key_sign_in_applies, os.environ):
+            # agent.kas_api_key_sign_in: the engine signs in with KIRO_API_KEY itself.
+            return True
         await KasAuthProvider(default_token_store(), allow_env_api_key=False).current()
     except Exception as exc:  # noqa: BLE001 - an unusable sign-in is not ready
         # Type only: a refresh error's message can carry response bytes.

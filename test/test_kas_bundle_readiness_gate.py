@@ -306,6 +306,19 @@ class TestCrewSigninReady:
             assert await kiro_readiness.kas_crew_signin_ready(None) is False
 
     @pytest.mark.asyncio
+    async def test_the_api_key_opt_in_is_ready_with_an_empty_vault(self):
+        """``agent.kas_api_key_sign_in``: the engine signs in with the key, not the vault."""
+        current = AsyncMock(side_effect=NotAuthenticated("none"))
+        with (
+            patch.object(kiro_readiness, "_kas_bundle_turn_sync", return_value=True),
+            patch("kiro_crew.auth.bridge.api_key_sign_in_applies", return_value=True),
+            patch(_STORE),
+            patch(_PROVIDER, _provider(current)),
+        ):
+            assert await kiro_readiness.kas_crew_signin_ready(None) is True
+        current.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_off_the_bundle_route_the_vault_is_not_read(self):
         current = AsyncMock(return_value=object())
         with (

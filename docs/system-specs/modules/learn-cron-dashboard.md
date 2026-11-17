@@ -2724,7 +2724,9 @@ specified compatibility change.
   pin)` to `resolve_kas_route(pin=...)`), as `KasHarness.resolve_spawn` judges
   `kas_route` rule 2. Either way `KasAuthProvider.current()` must yield a credential
   from Crew's sign-in (resolved and, when needed, refreshed; no identity or a
-  refused refresh is not ready). That turn spawns no `kiro-cli`. The `kiro-cli`
+  refused refresh is not ready), unless `agent.kas_api_key_sign_in` has the engine
+  sign in with `KIRO_API_KEY` itself (`auth.bridge.api_key_sign_in_applies`), which
+  is ready. That turn spawns no `kiro-cli`. The `kiro-cli`
   spawn sites leave `harness_turn` False. `turn_gate_target` names the session
   from the target slot (`None` for a slot not created yet); a slot it cannot
   read leaves `harness_turn` False, so the `kiro-cli` gate decides.
@@ -5931,7 +5933,8 @@ through kiro-cli (the scoping is above), returning the shared
 `kiro_prerequisite_required` 503 (`kiro_probe_timed_out` when the latest probe
 timed out).
 When the slot's session runs on the KAS engine bundle and Crew's sign-in
-yields a credential, the gate passes without consulting `kiro-cli`
+yields a credential (or `agent.kas_api_key_sign_in` hands the engine
+`KIRO_API_KEY`), the gate passes without consulting `kiro-cli`
 (`harness_turn=True`, `kas_crew_signin_ready()`), because that turn runs and
 authenticates with no `kiro-cli` involved. Regenerate reuses the live session,
 so its gate judges that running process (`live_turn_route`); edit-resend and
