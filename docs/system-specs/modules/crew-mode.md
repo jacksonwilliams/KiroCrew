@@ -5390,10 +5390,15 @@ moved notice still owed) and one bell note linking to its page
 limits are held and that the Bot keeps asking. A held hook on an event that sees no
 call (`NO_CALL`) never makes the Bot ask, so the chat notice names it apart as one
 that no longer runs, and it alone owes no bell note (`mate_held_rules.held_sentence`,
-`asks_for`). Nothing clears a hold: a save of
-the Bot's approval mode does not, since an `auto` cron's approval does not depend
-on that mode (#37277 tracks Kiro Crew's own sub-agent tools; a control to review
-and release held rules is #37321). Every read-modify-write of
+`asks_for`). A save of the Bot's approval mode does not clear a hold, since an
+`auto` cron's approval does not depend on that mode (#37277 tracks Kiro Crew's own
+sub-agent tools). The owner, or a Shared Crew teammate, ends all of a Bot's held
+limits from the "Asks you first" section of its Profile tab
+(`mate_held_rules.release_held`, under the ledger lock and only while they still
+equal the list the page showed; one SEL row). Otherwise a hold ends only when the
+move undoes one it just recorded because its repoint failed
+(`mate_restriction_carry._drop_hold`), or when the one-time recheck of a Bot held on
+every call, below, finds it no longer needed. Every read-modify-write of
 `migrated.json` runs under `mate_ledger_lock.ledger_lock` (a thread lock plus a
 `migrated.json.lock` file lock, since two gateways with their own data homes can
 share one Kiro home), so one writer cannot erase a hold another records. A Bot whose repoint fails stays on its old agent, which still

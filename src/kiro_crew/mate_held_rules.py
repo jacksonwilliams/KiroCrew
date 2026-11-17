@@ -15,8 +15,11 @@ it speaks about, and:
   (:func:`held_for`): an ``auto`` cron, Trust, YOLO, a trusted pattern or a hook
   grant sends it to the approval card instead, and a surface with no card refuses it.
 
-Nothing clears a hold: picking the Bot's approval mode does not, since an ``auto``
-cron's approval does not depend on that mode. Every other call behaves as before.
+Picking the Bot's approval mode does not clear a hold, since an ``auto`` cron's
+approval does not depend on that mode; what does is a person's release on the Bot's
+Profile tab (:func:`release_held`), the move undoing a hold it just recorded
+(:func:`drop_held`), or the startup recheck of a Bot held on every call finding it no
+longer needed (``mate_policy_repair``). Every other call behaves as before.
 Blocking file I/O; never raises from the gate.
 """
 
@@ -28,7 +31,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeGuard
 
 from kiro_crew.user_json import copy_json_document
 
@@ -272,7 +275,7 @@ def _ask(capability: str) -> dict[str, str]:
 
 
 def record_held(name: str, member_id: str, held: list[dict[str, str]]) -> None:
-    """Record *held* as Bot *name*'s restrictions that need a person; none clears it."""
+    """Record *held* as Bot *name*'s restrictions that need a person, until one releases them."""
     from kiro_crew.mate_ledger_lock import ledger_lock
 
     with ledger_lock():
@@ -289,6 +292,41 @@ def drop_held(name: str, member_id: str) -> None:
         entry = entries.get(name) if isinstance(entries, dict) else None
         if isinstance(entry, dict) and str(entry.get("member_id") or "") == member_id:
             _record_held(name, member_id, [])
+
+
+def _is_bots(entry: Any, member_id: str) -> TypeGuard[dict[str, Any]]:
+    """Whether *entry*, the one recorded under a Bot's name, is that Bot's, as the gate matches it."""
+    if not isinstance(entry, dict):
+        return False
+    recorded = str(entry.get("member_id") or "")
+    return not recorded or recorded == member_id
+
+
+def held_rules_of(name: str, member_id: str) -> list[Any] | None:
+    """Bot *name*'s held restrictions, ``[]`` when none, ``None`` while the record is unreadable."""
+    entries = _held_entries()
+    if entries is None:
+        return None
+    entry = entries.get(name)
+    return list(entry.get("rules") or []) if _is_bots(entry, member_id) else []
+
+
+def release_held(name: str, member_id: str, shown: list[Any]) -> bool:
+    """Clear Bot *name*'s held restrictions only while they still equal *shown*.
+
+    Raises :class:`~kiro_crew.mate_config_migration.LedgerUnreadable` or
+    :class:`OSError` when the record cannot be read; ``False`` writes nothing.
+    """
+    from kiro_crew.mate_config_migration import _read_ledger
+    from kiro_crew.mate_ledger_lock import ledger_lock
+
+    with ledger_lock():
+        entries = _read_ledger().get(HELD_KEY)
+        entry = entries.get(name) if isinstance(entries, dict) else None
+        if not shown or not _is_bots(entry, member_id) or entry.get("rules") != shown:
+            return False
+        _record_held(name, member_id, [])
+        return True
 
 
 def _record_held(name: str, member_id: str, held: list[dict[str, str]]) -> None:
