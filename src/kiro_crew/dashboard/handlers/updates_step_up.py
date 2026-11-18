@@ -562,8 +562,12 @@ async def api_update_approve(request: web.Request) -> web.Response:
         code = "approve_memory_preparing" if outcome.status == "deferred" else "approve_memory"
         return web.json_response({"error": outcome.message, "code": code}, status=409)
     state: DashboardState = request.app["state"]
-    if state._gateway_restart_in_progress is True:
-        # The restart's exec would stop the apply before it could be audited.
+    if (
+        state._gateway_restart_in_progress is True
+        or getattr(state, "_restart_commit_hold", None) is not None
+    ):
+        # A restart under way, or promised by a committed `restart --when-idle`,
+        # would stop the apply before it could be audited.
         return web.json_response(
             {
                 "error": "the gateway is restarting; approve the update again once it is back",
@@ -756,6 +760,18 @@ async def api_update_approve(request: web.Request) -> web.Response:
         state.push_update_progress("failed", detail)
         state.push_refresh("update_failed")
 
+    # Read again with no await before the launch: a committed `restart
+    # --when-idle` hold or a dashboard restart begun during the awaits above
+    # would stop the install partway, and the check at the top ran before them.
+    if (
+        getattr(state, "_restart_commit_hold", None) is not None
+        or state._gateway_restart_in_progress is True
+    ):
+        error = "a restart is pending; arm and approve the update again once it is back"
+        await _audit("denied", error=error, resources=f"v{pending.version}")
+        return await _refuse(
+            web.json_response({"error": error, "code": "restart_pending"}, status=409)
+        )
     task = asyncio.create_task(_apply())
     state._background_tasks.add(task)
     task.add_done_callback(state._background_tasks.discard)

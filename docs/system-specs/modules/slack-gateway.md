@@ -676,7 +676,11 @@ take the hold in `cli.main` after argument parsing.
   update lock (the approve route takes it before it spends the nonce), since
   every other apply then loses on that lock. The approve route also refuses
   (`approve_restarting`, before the lock and the nonce) while a gateway restart
-  is under way, whose exec would stop the apply before its outcome is audited.
+  is under way or a committed `restart --when-idle` hold promises one, whose
+  exec would stop the apply before its outcome is audited, and again
+  (`restart_pending`, after the grant, recording `denied` and releasing the
+  lock) when either begins during the approval's awaits, read with no await
+  between the check and the launch.
   Turns, crons and spawns keep running for the whole build; nothing pauses until
   the restart. A caller-held update lock is released exactly once by the
   `mc-update` worker's `finally`, after the engine finishes, including when a

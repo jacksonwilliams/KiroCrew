@@ -59,6 +59,8 @@ def _request(
         req.transport.get_extra_info = lambda key, default=None: default
     state = MagicMock()
     state._background_tasks = set()
+    # DashboardState starts with no committed ``restart --when-idle`` hold.
+    state._restart_commit_hold = None
     req.app = {"state": state}
     return req
 
@@ -1382,19 +1384,33 @@ class TestApproveEndpoint:
         ), steps
         _assert_update_lock_free()
 
+    @pytest.mark.parametrize("restart", ["dashboard_restart", "commit_hold"])
     async def test_a_restart_in_progress_refuses_before_the_nonce_is_used(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, restart: str
     ) -> None:
-        """The restart's exec would stop the apply before its outcome is audited."""
+        """The restart's exec would stop the apply before its outcome is audited.
+
+        ``commit_hold`` is a ``restart --when-idle`` committed before the approve.
+        """
         from kiro_crew.platform import wheel_engine
 
         monkeypatch.setattr(updates, "resolve_provider", lambda: None)
         locked: list[int] = []
-        monkeypatch.setattr(wheel_engine, "hold_update_lock", lambda: locked.append(1) or 0)
+
+        def no_lock() -> int:
+            # Refused rather than faked: a guard that missed must not apply.
+            locked.append(1)
+            raise wheel_engine.WheelUpdateError("the update lock must not be taken")
+
+        monkeypatch.setattr(wheel_engine, "hold_update_lock", no_lock)
         pending = update_stepup.arm("9.9.9", "stable")
+        hold = asyncio.get_running_loop().call_later(3600, lambda: None)
         try:
             req = _request({"nonce": pending.nonce})
-            req.app["state"]._gateway_restart_in_progress = True
+            if restart == "commit_hold":
+                req.app["state"]._restart_commit_hold = hold
+            else:
+                req.app["state"]._gateway_restart_in_progress = True
             resp = await updates.api_update_approve(req)
             assert (resp.status, json.loads(resp.body.decode())["code"]) == (
                 409,
@@ -1403,6 +1419,53 @@ class TestApproveEndpoint:
             assert update_stepup.read_pending() is not None, "the armed request is intact"
             assert locked == [] and req.app["state"]._background_tasks == set()
         finally:
+            hold.cancel()
+            update_stepup.clear_pending()
+
+    @pytest.mark.parametrize("pending_restart", ["commit_hold", "dashboard_restart"])
+    async def test_a_restart_promised_before_the_launch_refuses_the_install(
+        self, monkeypatch: pytest.MonkeyPatch, pending_restart: str
+    ) -> None:
+        """A restart promised during the last await before the launch would cut the install."""
+        from kiro_crew.platform import wheel_apply
+
+        async def forbidden(**_kw: object) -> None:
+            raise AssertionError("no install may start under a pending restart")
+
+        audited: list[str] = []
+        monkeypatch.setattr(wheel_apply, "run_wheel_apply", forbidden)
+        monkeypatch.setattr(updates, "resolve_provider", lambda: None)
+        monkeypatch.setattr(updates, "min_version", lambda: "")
+        monkeypatch.setattr(
+            updates,
+            "_audit_update_event",
+            AsyncMock(side_effect=lambda *a, **k: audited.append(k["outcome"])),
+        )
+        pending = update_stepup.arm("9.9.9", "stable")
+        req = _request({"nonce": pending.nonce})
+        state = req.app["state"]
+        hold = asyncio.get_running_loop().call_later(3600, lambda: None)
+
+        def promise_restart(_version: str) -> bool:
+            # The last await before the launch: a restart promised while it ran.
+            if pending_restart == "commit_hold":
+                state._restart_commit_hold = hold
+            elif pending_restart == "dashboard_restart":
+                state._gateway_restart_in_progress = True
+            return False
+
+        monkeypatch.setattr(wheel_apply, "userns_reattach_needed", promise_restart)
+        try:
+            resp = await updates.api_update_approve(req)
+            assert (resp.status, json.loads(resp.body.decode()).get("code")) == (
+                409,
+                "restart_pending",
+            )
+            assert audited == ["granted", "denied"]
+            assert state._background_tasks == set()
+            _assert_update_lock_free()
+        finally:
+            hold.cancel()
             update_stepup.clear_pending()
 
     async def test_an_apply_already_holding_the_lock_refuses_before_the_nonce_is_used(
