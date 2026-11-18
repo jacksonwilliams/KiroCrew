@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         FALLBACK_CANDIDATE_ATTEMPTS,
         HOOK_EVENT_POST_TOOL_USE,
         STOP_CLASS_CANCELLED,
+        STOP_REASON_STALE_RECOVER,
         TERMINAL_TOOL_STATUSES,
         TRANSIENT_RETRIES,
         Any,
@@ -812,16 +813,15 @@ async def _run_inner_impl(
                     from kiro_crew.messaging.identity import publish_turn_identity
 
                     await publish_turn_identity(self._manager._sessions, session_key)
-                # A completion whose stop reason classifies as RECOVERABLE
-                # (tool stall, stale_recover) is withheld from the run loop
-                # while budget remains: the slot is yielded, re-admitted,
-                # and a continue-nudge is sent on the SAME session so the
-                # preserved partial is finished in place — never a verbatim
-                # re-run of the original task. Mirrors chat_runner's
-                # tool-stall continuation and shares its budget
-                # (STOP_RECOVERY_MAX_RETRIES). Once the budget is spent the
-                # completion is surfaced and the run ends `failed` with the
-                # partial flagged.
+                # A completion whose stop reason classifies as RECOVERABLE (tool stall,
+                # stale_recover) is withheld from the run loop while budget remains: the
+                # slot is yielded, re-admitted, and a continue-nudge is sent on the SAME
+                # session so the preserved partial is finished in place, never a verbatim
+                # re-run of the original task. A stale_recover of a run that streamed
+                # nothing (no text, no tool call) sends the probed prompt again: the
+                # agent may not hold a prompt it never answered. Mirrors chat_runner's stall
+                # continuations and shares their budget (STOP_RECOVERY_MAX_RETRIES). Once
+                # spent, the completion is surfaced and the run ends `failed`, partial flagged.
                 #
                 # A completion that ended NORMALLY right after a tool call
                 # the MCP gateway refused for capacity (``last_infra_error``
@@ -968,16 +968,16 @@ async def _run_inner_impl(
                 else:
                     _nudge = await self._manager._yield_for_stop_recovery(info, _withheld)
                 if _nudge is None:
-                    # Re-admission failed: surface the withheld completion
-                    # so the run ends through the classifier as `failed`
-                    # (or, for a spent L1 budget, as the normal completion
-                    # it was -- the parent sees the refused call in the
-                    # partial).
+                    # Re-admission failed: surface the withheld completion so the run
+                    # ends through the classifier as `failed` (or, for a spent L1 budget,
+                    # as the normal completion it was: the parent sees the refused call).
                     yield _withheld
                     return
                 _report_if_landed(_withheld)
                 _final_segment = ""
-                msg = _nudge
+                _silent = not (result_text or turns or info.tool_count)
+                _replays = getattr(_withheld, "stop_reason", "") == STOP_REASON_STALE_RECOVER
+                msg = msg if _silent and _replays else _nudge
                 continue
             except asyncio.CancelledError:
                 raise

@@ -34,6 +34,8 @@ from kiro_crew.acp.types import (
 )
 from kiro_crew.agent_sdk.capabilities import capabilities_for
 from kiro_crew.dashboard import chat_runner
+from kiro_crew.dashboard.chat_utils import RecoveryPayload
+from kiro_crew.dashboard.state import STALE_RECOVERY_PREFIX
 from kiro_crew.providers.base import LLMEvent
 from kiro_crew.testing.wait import await_until
 
@@ -833,15 +835,120 @@ class TestRunChatLocalCommands:
 class TestRunChatRecoveryLadders:
     @pytest.mark.asyncio
     async def test_stale_recover_requeues_a_continuation(self, tmp_path):
+        """A probed turn that streamed something is continued, not replayed."""
         state, client = _runner_state(tmp_path)
         slot = _slot()
-        _set_stream(client, [_complete(STOP_REASON_STALE_RECOVER)])
+        _set_stream(
+            client,
+            [LLMEvent(kind=EVENT_TEXT_CHUNK, text="partial"), _complete(STOP_REASON_STALE_RECOVER)],
+        )
+        queue_recovery = MagicMock(wraps=chat_runner._queue_recovery)
 
-        with patch.object(chat_runner, "_start_next_queued_turn", new=AsyncMock(return_value=True)):
+        with (
+            patch.object(chat_runner, "_start_next_queued_turn", new=AsyncMock(return_value=True)),
+            patch.object(chat_runner, "_queue_recovery", new=queue_recovery),
+        ):
             await _drive(state, slot)
 
         assert slot._stale_recovery_retries == 1
         assert any("Recovering a stalled turn" in err for err in _errors(slot))
+        (_turn, _index, content), kwargs = queue_recovery.call_args
+        assert content.startswith(STALE_RECOVERY_PREFIX)
+        assert kwargs["payload"] == RecoveryPayload.CONTINUATION
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("synthetic", "payload"),
+        [(False, RecoveryPayload.ORIGINAL), (True, RecoveryPayload.CONTINUATION)],
+        ids=["user-turn", "recovery-turn"],
+    )
+    async def test_stale_recover_with_nothing_streamed_resends_the_message(
+        self, tmp_path, synthetic, payload
+    ):
+        """The agent may not hold a prompt it never answered, so a continue would
+        have nothing to continue: the message itself goes out again, tagged the
+        person's own words only when they were."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        state.sessions.reset = AsyncMock()
+        _set_stream(client, [_complete(STOP_REASON_STALE_RECOVER)])
+        queue_recovery = MagicMock(wraps=chat_runner._queue_recovery)
+
+        with (
+            _quiet_sel(),
+            patch.object(chat_runner, "_start_next_queued_turn", new=AsyncMock(return_value=True)),
+            patch.object(chat_runner, "_queue_recovery", new=queue_recovery),
+        ):
+            await chat_runner._run_chat(state, slot, "do the thing", _synthetic_payload=synthetic)
+        await _settle(slot)
+
+        assert slot._stale_recovery_retries == 1
+        assert any("Recovering a stalled turn" in err for err in _errors(slot))
+        state.sessions.reset.assert_awaited_once()
+        (_turn, _index, content), kwargs = queue_recovery.call_args
+        assert content == "do the thing"
+        assert kwargs["payload"] == payload
+
+    @pytest.mark.asyncio
+    async def test_stale_recover_with_nothing_streamed_yields_to_a_user_followup(self, tmp_path):
+        """A replay lands at queue index 0, ahead of the correction the person
+        typed meanwhile, so nothing is queued and the turn gives up instead."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        _set_stream(client, [_complete(STOP_REASON_STALE_RECOVER)])
+        slot.queue_insert(0, "actually, do this instead", kind="user", payload="")
+        queue_recovery = MagicMock(wraps=chat_runner._queue_recovery)
+
+        with patch.object(chat_runner, "_queue_recovery", new=queue_recovery):
+            await _drive(state, slot, "do the thing")
+
+        queue_recovery.assert_not_called()
+        assert slot._stale_recovery_retries == 0
+        assert any("please retry" in err for err in _errors(slot)), _errors(slot)
+        assert not any("Recovering a stalled turn" in err for err in _errors(slot))
+
+    @pytest.mark.asyncio
+    async def test_stale_recover_with_a_spent_budget_and_a_user_followup_asks_for_a_new_chat(
+        self, tmp_path
+    ):
+        """A spent budget is the terminal notice whatever the person queued since."""
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        slot._stale_recovery_retries = chat_runner.STOP_RECOVERY_MAX_RETRIES
+        _set_stream(client, [_complete(STOP_REASON_STALE_RECOVER)])
+        slot.queue_insert(0, "actually, do this instead", kind="user", payload="")
+
+        await _drive(state, slot, "do the thing")
+
+        assert any("start a new chat" in err for err in _errors(slot)), _errors(slot)
+        assert not any("please retry" in err for err in _errors(slot))
+
+    @pytest.mark.asyncio
+    async def test_stale_recover_with_nothing_streamed_requeues_an_owed_completion(self, tmp_path):
+        """A sub-agent completion the parent is still owed is queued again as the
+        completion it is, ahead of a follow-up the person queued meanwhile."""
+        completion = "[Subagent completion event] the child finished"
+        state, client = _runner_state(tmp_path)
+        slot = _slot()
+        state.sessions.reset = AsyncMock()
+        _set_stream(client, [_complete(STOP_REASON_STALE_RECOVER)])
+        slot.queue_insert(0, "actually, do this instead", kind="user", payload="")
+
+        with (
+            _quiet_sel(),
+            patch.object(chat_runner, "_start_next_queued_turn", new=AsyncMock(return_value=True)),
+        ):
+            await chat_runner._run_chat(
+                state, slot, completion, _turn_actor="subagent", _on_consumed=MagicMock()
+            )
+        await _settle(slot)
+
+        assert slot._stale_recovery_retries == 1
+        assert any("Recovering a stalled turn" in err for err in _errors(slot))
+        assert [(e["kind"], e["content"]) for e in slot._queue] == [
+            (chat_runner.SUBAGENT_COMPLETION_KIND, completion),
+            ("user", "actually, do this instead"),
+        ]
 
     @pytest.mark.asyncio
     async def test_stale_recover_budget_exhaustion_asks_for_a_new_chat(self, tmp_path):
