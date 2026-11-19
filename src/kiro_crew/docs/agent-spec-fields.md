@@ -134,10 +134,20 @@ Four cases, and the difference between them is the whole answer:
   (`acp/kas_subagent_targets.py`). A Kiro Crew server both agents load, and a
   pooled server both set up alike, reach the sub-agent as the chat's own copy.
   Kiro Crew's own agents (the ones it writes a file for, such as `kirocrew-worker`)
-  can never be run as a KAS sub-agent, listed or not. A sub-agent is held to the
+  can never be run as a KAS sub-agent, listed or not. An agent whose
+  `excludedTools` name the sub-agent tool (`use_subagent`, `subagent`,
+  `invoke_sub_agent`, or a tag or pattern that covers it, such as `@builtin`)
+  starts no KAS sub-agent at all: KAS also gives an agent one `subagent_<name>`
+  tool per agent it knows, which the exclusion alone would leave, so Kiro Crew
+  refuses those too. A sub-agent is held to the
   chat's own agent's shell and write allowlists and `deniedCommands`, and gets none
   of its grants. The chat's own agent's `postToolUse` hooks run on a sub-agent's
-  finished calls too.
+  finished calls too. With `agent.subagents = "engine"` (the default) a dashboard
+  chat on the default agent also reaches Kiro Crew's built-in `kirocrew-helper`
+  (built-in tools only); your own agents keep exactly what their file says. With
+  `agent.subagents = "crew"` no agent on KAS starts a KAS sub-agent: every agent
+  of the session is refused the engine's sub-agent tools, whatever its `tools`
+  list, and hands work off with `spawn_run`.
   A server the sub-agent's own agent file turns off (`"disabled": true`) stays
   off for the sub-agent, even when the chat's own agent loads it.
   A sub-agent runs inside the chat's turn, so the chat's own agent's

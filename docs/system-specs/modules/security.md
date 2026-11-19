@@ -3820,6 +3820,14 @@ and every gap fails closed:
   applied by `acp/kas_native_batch.py`). A deny only narrows. Each entry that gains
   it records one `kas_subagent_own_agents_denied` security event (source
   `kas_agent_projection`) naming the entry (`kas_subagent_targets.audit_subagent_policy`).
+  With `agent.subagents = "crew"` every entry also carries an unconditional
+  `subagent` deny (`kas_subagent_targets.deny_every_subagent`), recorded as
+  `kas_engine_subagents_off`: no agent of the session starts an engine sub-agent.
+  An entry whose `excludedTools` withhold the sub-agent tool carries the same
+  deny under every value (`kas_subagent_targets.deny_excluded_subagent_tool`,
+  recorded as `kas_subagent_tool_excluded`), so the engine's per-agent
+  `subagent_<id>` tools, which that exclusion does not reach, start nothing
+  either, Kiro Crew's own agents included.
 - *Gate-only limits.* A native child's request shares the session's id and is told
   apart by the id its `agentSubtaskId` frame recorded. `_build_permission_event`
   stamps the session agent's LIMITS on it (`_stamp_parent_limits`): the shell and

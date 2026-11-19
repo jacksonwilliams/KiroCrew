@@ -196,6 +196,71 @@ def deny_own_agents(custom_agents: list[dict[str, Any]]) -> list[dict[str, Any]]
     return out
 
 
+#: The rule that takes every engine sub-agent away from an entry. The engine has two
+#: kinds of sub-agent tool, ``invoke_sub_agent`` and one ``subagent_<id>`` per agent
+#: its registry holds, and files both under the ``subagent`` capability: a capability
+#: denied whole leaves the agent's tool list, and a call that still names one is
+#: refused by the rule. The shape ``kas_subagent_rules._available_agents_rules``
+#: sends for ``availableAgents: []``.
+NO_ENGINE_SUBAGENTS_RULE: dict[str, Any] = {"capability": "subagent", "effect": "deny"}
+
+
+def deny_every_subagent(entry: dict[str, Any], operation: str, why: str) -> dict[str, Any]:
+    """*entry* refusing every engine sub-agent, recorded as security event *operation*.
+
+    A deny only narrows, so it needs no pass through the governance ceiling, and
+    KAS resolves the most restrictive matching rule, so it holds against an
+    ``availableAgents`` exclude and a ``trustedAgents`` allow on the same entry.
+    Only the rule is added: the entry's ``tools``, ``excludedTools`` and servers
+    stay, so a Kiro Crew MCP tool it mounts is untouched. An entry that already
+    carries the rule is returned as it is.
+    """
+    held = entry.get("permissions")
+    block = dict(held) if isinstance(held, dict) else {}
+    rules = block.get("rules")
+    kept = rules if isinstance(rules, list) else []
+    if NO_ENGINE_SUBAGENTS_RULE in kept:
+        return entry
+    block["rules"] = [*kept, dict(NO_ENGINE_SUBAGENTS_RULE)]
+    audit_subagent_policy(operation, str(entry.get("id") or ""), why)
+    return {**entry, "permissions": block}
+
+
+def excludes_subagent_tool(entry: Any) -> bool:
+    """Whether the projected *entry*'s ``excludedTools`` withhold the sub-agent tool.
+
+    Read as :func:`mounts_subagent_tool` reads an exclusion: an entry equal to the
+    tool's id (which the projection also writes for kiro-cli's ``use_subagent``),
+    or a tag or pattern that covers it.
+    """
+    excluded = entry.get("excludedTools") if isinstance(entry, dict) else None
+    return isinstance(excluded, list) and any(_selects_subagent_tool(t) for t in excluded)
+
+
+def deny_excluded_subagent_tool(custom_agents: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """*custom_agents* with every engine sub-agent denied to an entry that excludes the tool.
+
+    The engine's tool filter applies an exclusion of ``invoke_sub_agent`` (or of
+    ``@builtin``) to that tool alone. Its per-agent ``subagent_<id>`` tools carry
+    neither that id nor that tag, so an agent whose file says "no sub-agent tool"
+    keeps them and starts a child through one. The file's author withheld the
+    tool, so the entry gets the rule that withholds both kinds
+    (:func:`deny_every_subagent`), recorded as ``kas_subagent_tool_excluded``.
+    """
+    return [
+        (
+            deny_every_subagent(
+                entry,
+                "kas_subagent_tool_excluded",
+                "every engine sub-agent denied (its excludedTools withhold the sub-agent tool)",
+            )
+            if excludes_subagent_tool(entry)
+            else entry
+        )
+        for entry in custom_agents
+    ]
+
+
 def audit_subagent_policy(operation: str, agent_id: str, what: str) -> None:
     """Record a ``subagent`` rule a projection adds in the security event log.
 

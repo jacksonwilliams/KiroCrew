@@ -3261,9 +3261,62 @@ spec the same way kiro-cli v2 does where the wire allows it:
   no profile written for kiro-cli (`allowedTools` or `toolsSettings` and no
   `permissions`), so a name the batch lacks is answered `Agent '<name>' not found
   in registry`; it does keep a profile that carries a `permissions` block, which is
-  why every entry that mounts the tool also carries a `subagent` deny over Kiro
-  Crew's own agent names (`kas_subagent_targets.deny_own_agents`, applied last by
-  `acp/kas_native_batch.native_batch`), listed or not. Only when the agent's projected entry mounts `invoke_sub_agent`,
+  why every entry of the batch carries a `subagent` deny over Kiro Crew's own
+  agent names (`kas_subagent_targets.deny_own_agents`, applied last by
+  `acp/kas_native_batch.native_batch`), listed or not, and whether or not it
+  selects `invoke_sub_agent`: the engine's per-agent `subagent_<id>` tool hands its
+  call to the same `invoke_sub_agent` handler, whose approval names the agent.
+  A parent that selects only per-agent tools still has its refused targets denied
+  (`project_subagent_targets` classifies them and registers nothing). After that deny, on
+  `agent.subagents = "crew"`, every entry of the batch (the session's own agent
+  and each registered target, in every session kind, a remote workspace included)
+  gains the unconditional rule `{"capability": "subagent", "effect": "deny"}`
+  (`kas_engine_subagents.without_engine_subagents`,
+  `kas_subagent_targets.deny_every_subagent`), the shape `availableAgents: []`
+  already projects. The engine has two kinds of sub-agent tool, `invoke_sub_agent`
+  and one `subagent_<id>` per agent its registry holds; a `tools` of `"*"` or
+  `@builtin` mounts them without naming them, both are the `subagent` capability,
+  and both ask through one permission check. The engine takes a capability denied
+  whole off the agent's tool list and refuses a call that still names one, so no
+  agent file starts an engine sub-agent on `"crew"`, and only a rule is added: the
+  entry's `tools`, `excludedTools` and servers stay, so `spawn_run` and
+  `spawn_sub_agents` (MCP tools) are untouched. Each entry that gains the rule
+  records one `kas_engine_subagents_off` security event. Under every value, an
+  entry whose `excludedTools` withhold the sub-agent tool
+  (`kas_subagent_targets.excludes_subagent_tool`: `invoke_sub_agent`, which the
+  projection also writes for kiro-cli's `use_subagent`, or a tag or pattern that
+  covers it) gains the same rule (`deny_excluded_subagent_tool`, recorded as
+  `kas_subagent_tool_excluded`): the engine's tool filter applies that exclusion
+  to `invoke_sub_agent` alone, and the per-agent `subagent_<id>` tools carry
+  neither its id nor `@builtin`, so the file's "no sub-agent tool" would otherwise
+  leave them mounted and callable. Before the own-agents deny,
+  `native_batch` applies `agent.subagents`: on `"engine"` (the default) and only
+  when `kas_engine_subagents.engine_subagents_on` holds (a `dashboard:` /
+  `dashboard_` key that is not a crew member's, the default agent `kirocrew`, no
+  member dispatch or Crew panel, the chat-runtime-sharing preview off), the default
+  agent's entry gains `invoke_sub_agent` in `tools`, a `subagent` deny on every name
+  but `kirocrew-helper`, and `@kirocrew-core/spawn_sub_agents` in `excludedTools`,
+  and the in-memory helper entry (`acp/kas_engine_subagent_target.py`) is appended,
+  carrying every `deny` and `ask` rule of the default agent's entry (never an
+  allow) and withholding auto-approval for what that agent's own spec PreToolUse
+  hooks cover, as a registered target's entry does. The helper's ceiling is never
+  wider than its parent's: a default-agent spec carrying a restriction the helper
+  cannot mirror (`kas_engine_subagents.unmirrored_restriction`: an unreadable spec,
+  an `excludedTools` entry that withdraws a built-in or names no known MCP server,
+  any `toolsSettings`, a `tools` or `allowedTools` narrower than the helper's)
+  refuses the mount, and that chat keeps Kiro Crew's own sub-agents exactly as on
+  main. A mount records one `kas_engine_subagent_mounted` security event (source
+  `kas_agent_projection`) naming the agent and how many of its rules the helper
+  carries (`kas_subagent_targets.audit_subagent_policy`).
+  A batch that already holds that id, or an agent file of that name in the user's
+  or the project's agents folder, refuses the mount with a session-start notice.
+  The config is read in the projection thread; an unreadable config mounts
+  nothing. The spec on disk is never written, and the process-sharing check
+  (`chat_runtime_sharing.agent_spawns_native_subagents`) reads that spec, so it is
+  unchanged by the mount, which the preview keeps off anyway. The Tool Search
+  never-defer list stays the agent's (`tool_search.JOB_TOOLS`): it is sent at the
+  runtime's handshake, before any session is known, and an excluded tool it names
+  is not on the entry's surface. Only when the agent's projected entry mounts `invoke_sub_agent`,
   read as the engine's tool filter reads it: `tools` is `"*"` or holds an entry
   equal to the tool's id or one of its tags (`@builtin`, `@subagent`), or a `*` or
   `?` pattern matching one, and no `excludedTools` entry does the same. An
