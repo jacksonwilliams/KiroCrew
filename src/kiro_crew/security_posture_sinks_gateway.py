@@ -1106,4 +1106,12 @@ _GATEWAY_SINKS: tuple[tuple[str, str, str], ...] = (
         "policy cannot be composed lists no name. The CLI repeats it on what "
         "it prints.",
     ),
+    (
+        "Second-view tab metadata handed to an app page",
+        "dashboard/handlers/browser_live_views.py",
+        "The `/api/browser/live/views/tabs` route lists the slot's own tabs for an "
+        "app page's `BrowserView tabId` picker. Each tab's URL and title passes the "
+        # _redacted runs both redact_exfiltration_urls and redact_credentials.
+        "exfiltration-URL and credential redactors before it leaves the gateway.",
+    ),
 )
