@@ -34,8 +34,11 @@ from kiro_crew.dashboard.kiro_readiness import (
     turn_gate_target,
 )
 from kiro_crew.dashboard.relay_archive import (
+    CRON_RUN_READ_ONLY_CODE,
+    CRON_RUN_READ_ONLY_ERROR,
     RELAY_ARCHIVE_CODE,
     RELAY_ARCHIVE_ERROR,
+    is_cron_run_read_only,
     is_relay_archive,
 )
 from kiro_crew.dashboard.slot_buffers import flush_restored_hold
@@ -461,24 +464,34 @@ async def api_completions(request: web.Request) -> web.StreamResponse:
         # (`_run_chat`) would append the prompt and emit a WS-only `chat_done`,
         # leaving this HTTP caller waiting on a turn that never runs. Refuse
         # BEFORE any mutation. A freshly-created slot is always local, so this
-        # only rejects an existing archive.
-        if is_relay_archive(slot):
+        # only rejects an existing archive. A cron run's transcript the History
+        # resume marked read-only ends at the same chokepoint, so it is refused
+        # here too, with its own code.
+        cron_run = is_cron_run_read_only(slot)
+        if cron_run or is_relay_archive(slot):
+            code, message = (
+                (CRON_RUN_READ_ONLY_CODE, CRON_RUN_READ_ONLY_ERROR)
+                if cron_run
+                else (RELAY_ARCHIVE_CODE, RELAY_ARCHIVE_ERROR)
+            )
             sel().log_api_access(
                 caller=request.remote or "",
                 operation="openai_compat.chat",
                 outcome="denied",
                 source="openai_compat",
                 resources=f"slot={slot_id}",
-                error="relay archive is read-only",
+                error=(
+                    "cron run transcript is read-only" if cron_run else "relay archive is read-only"
+                ),
             )
             return web.json_response(
                 {
                     "error": {
-                        "message": RELAY_ARCHIVE_ERROR,
+                        "message": message,
                         "type": "invalid_request_error",
-                        "code": RELAY_ARCHIVE_CODE,
+                        "code": code,
                     },
-                    "code": RELAY_ARCHIVE_CODE,
+                    "code": code,
                 },
                 status=409,
             )

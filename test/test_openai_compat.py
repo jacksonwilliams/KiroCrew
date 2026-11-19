@@ -1281,6 +1281,32 @@ class TestAgentMismatchFix:
         slot.append.assert_not_called()
         assert slot.task is None
 
+    async def test_a_read_only_cron_run_slot_is_refused_before_any_mutation(self):
+        """A cron run's transcript reopened read-only must 409, not hang the collector.
+
+        The turn chokepoint refuses it without a ``done`` row, so reaching it
+        would leave this HTTP caller waiting forever.
+        """
+        slot = _make_slot()
+        slot.agent = "vanellope"
+        slot.cron_run_read_only = True
+        state = _make_state(slot)
+
+        body = {
+            "id": "test-slot",
+            "model": "vanellope",
+            "messages": [{"role": "user", "content": "hi"}],
+            "stream": False,
+        }
+        request = _make_request(body, state)
+
+        resp = await api_completions(request)
+
+        assert resp.status == 409
+        assert json.loads(resp.body)["code"] == "cron_run_read_only"
+        slot.append.assert_not_called()
+        assert slot.task is None
+
     async def test_null_model_returns_400(self):
         """model=null (None in JSON) returns 400."""
         slot = _make_slot()
