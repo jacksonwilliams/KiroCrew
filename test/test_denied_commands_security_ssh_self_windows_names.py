@@ -77,3 +77,26 @@ def test_windows_own_name_variables_are_denied(cmd):
 )
 def test_other_hosts_and_variables_stay_allowed(cmd):
     assert _denied_by(cmd) is None, cmd
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        # A local file named after the machine is not a connection to it.
+        "scp %COMPUTERNAME%.log backup:/logs/",
+        "scp $env:COMPUTERNAME.zip backup:/archives/",
+        "rsync -av $env:COMPUTERNAME.d/ backup:/snapshots/",
+        "scp backup:/logs/app.log %COMPUTERNAME%.app.log",
+        # An ``@`` inside a remote path is path data, not userinfo.
+        "scp app.log backup:/logs/app@%COMPUTERNAME%.log",
+        "scp build.zip deploy@backup:/drops/ci@%COMPUTERNAME%.zip",
+        "scp app.log backup:/logs/app@$HOSTNAME.log",
+        "rsync -av backup:/srv/snapshots/ ./snap@$HOSTNAME.d/",
+    ],
+)
+def test_a_machine_named_file_or_remote_path_is_not_this_host(cmd):
+    assert _denied_by(cmd) is None, cmd
+
+
+def test_a_dotted_name_before_a_path_colon_is_this_host():
+    assert _denied_by("scp f.txt %COMPUTERNAME%.corp.example.com:/tmp/f.txt") == _RULE

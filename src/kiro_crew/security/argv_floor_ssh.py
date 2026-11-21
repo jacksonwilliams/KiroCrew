@@ -518,10 +518,22 @@ def _operand_targets_self(
     for hint in _HOSTNAME_SUBSTITUTION_HINTS:
         if hint in t:
             return True
-    # ``user@$env:computername``: the host is the part after the last ``@``.
-    for spelling in {t, t.rsplit("@", 1)[-1]}:
-        for var in _HOSTNAME_VARIABLE_FORMS:
-            if spelling == var or spelling.startswith((var + ".", var + ":")):
+    # The Windows spellings are read as a host where an operand can be one: whole
+    # (``$env:computername``), after userinfo (``user@%computername%``), before a
+    # path colon, or dotted in host position (``$env:computername.corp``). A dotted
+    # operand elsewhere is a local file (``%computername%.log``) and a ``@`` after a
+    # ``:`` or ``/`` is remote-path data (``backup:/logs/a@%computername%.log``).
+    user, at, rest = t.partition("@")
+    spellings = (t, rest) if at and not {":", "/"} & set(user) else (t,)
+    for var in _HOSTNAME_VARIABLE_FORMS:
+        bash_form = "hostname" in var
+        for spelling in spellings[:1] if bash_form else spellings:
+            tail = spelling[len(var) :] if spelling.startswith(var) else None
+            if tail is None:
+                continue
+            if tail == "" or tail.startswith(":"):
+                return True
+            if tail.startswith(".") and (bash_form or host_position or ":" in tail):
                 return True
     # An expansion's embedded default is the destination when the variable is
     # unset — check every ``${…:-word}``-style word (recursion terminates:
