@@ -1,6 +1,8 @@
 """Tests for deploy_web render_standalone + pre-publish scan."""
 from __future__ import annotations
 
+import pytest
+
 from kiro_crew.deploy.render import render_standalone
 from kiro_crew.deploy.scan import scan_content, summarize
 
@@ -61,6 +63,28 @@ def test_html_fragment_gets_wrapped():
     assert "<p>fragment</p>" in out
 
 
+@pytest.mark.parametrize(
+    "md, block",
+    [
+        ("use `ls` then \x000\x00 ok", "<p>use <code>ls</code> then 0 ok</p>"),
+        ("# use `ls` then \x000\x00 ok", "<h1>use <code>ls</code> then 0 ok</h1>"),
+        ("- use `ls` then \x000\x00 ok", "<li>use <code>ls</code> then 0 ok</li>"),
+    ],
+    ids=["paragraph", "heading", "list-item"],
+)
+def test_markdown_nul_shaped_text_does_not_copy_a_code_span(md, block):
+    out = render_standalone("markdown", md)
+    assert block in out
+    assert out.count("<code>ls</code>") == 1
+    assert "\x00" not in out
+
+
+def test_markdown_nul_shaped_index_past_the_spans_leaves_no_nul():
+    out = render_standalone("markdown", "use `ls` then \x007\x00 ok")
+    assert "<p>use <code>ls</code> then 7 ok</p>" in out
+    assert "\x00" not in out
+
+
 # --- scan -----------------------------------------------------------------
 
 def test_scan_clean_content():
@@ -72,6 +96,11 @@ def test_scan_clean_content():
 def test_scan_flags_aws_access_key():
     findings = scan_content("key AKIAABCDEFGHIJKLMNOP here")
     assert any(f.kind == "credential" for f in findings)
+
+
+def test_scan_of_rendered_markdown_flags_a_key_a_nul_split():
+    page = render_standalone("markdown", "key AKIAABCDEFGH\x00IJKLMNOP here")
+    assert any(f.kind == "credential" for f in scan_content(page))
 
 
 def test_scan_flags_internal_host_and_arn():

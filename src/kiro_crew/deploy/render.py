@@ -58,6 +58,8 @@ def _render_markdown(md: str) -> str:
 
     Escapes HTML first (untrusted-by-default), then re-introduces a safe subset.
     """
+    # inline() marks a code span as NUL<index>NUL; drop NUL so the text cannot pose as one.
+    md = md.replace("\x00", "")
     lines = md.splitlines()
     out: list[str] = []
     in_code = False
