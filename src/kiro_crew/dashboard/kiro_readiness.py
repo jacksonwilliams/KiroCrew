@@ -67,6 +67,14 @@ _KIRO_PROBE_TIMED_OUT_RESPONSE = {
     "try again in a moment.",
     "code": KIRO_PROBE_TIMED_OUT_CODE,
 }
+# A KAS turn Crew's own sign-in may not serve (:func:`kas_turn_verdict`). kiro-cli is
+# never asked for it, so this is not kiro-cli's code: the remedy is another sign-in.
+KAS_TURN_REFUSED_CODE = "kas_turn_refused"
+
+#: :func:`kas_turn_verdict`'s answers.
+KAS_TURN_READY = "ready"
+KAS_TURN_REFUSED = "refused"
+KAS_TURN_NOT_KAS_ROUTE = "not_kas_route"
 
 
 def is_probe_timeout_refusal(refusal: web.Response) -> bool:
@@ -391,6 +399,58 @@ async def kas_crew_signin_ready(
     return True
 
 
+def _registered_kas_turn_sync(
+    session_key: str | None, live_route: bool | None, config: object
+) -> bool:
+    """Whether the turn runs on KAS while the stored sign-in is an edition's own.
+
+    That sign-in is one no local agent may run on (``KasHarness.resolve_spawn``
+    refuses it before any route). The backend is chosen as the spawn's provider
+    factory chooses it, with no route or install asked: the refusal holds on every
+    route, and before the engine is installed. Blocking; never raises (an
+    unreadable backend keeps the kiro-cli gate, as on ``main``).
+    """
+    from kiro_crew.auth.login.endpoints import stored_sign_in_registered
+
+    if not stored_sign_in_registered():
+        return False
+    if live_route:
+        return True
+    try:
+        from kiro_crew.agent_sdk.backends import ACP_BACKEND_KAS
+        from kiro_crew.config.loader import KiroCrewConfig
+        from kiro_crew.dashboard.chat_handlers import configured_backend_for_session
+
+        cfg = config if config is not None else KiroCrewConfig.load()
+        return configured_backend_for_session(session_key, cfg) == ACP_BACKEND_KAS
+    except Exception as exc:  # noqa: BLE001 - an unreadable answer keeps the kiro-cli gate
+        logger.debug("Kiro readiness: KAS backend probe failed (%s)", type(exc).__name__)
+        return False
+
+
+async def kas_turn_verdict(
+    session_key: str | None, live_route: bool | None = None, *, config: object = None
+) -> str:
+    """Who authorizes the turn on *session_key*, and whether it may start.
+
+    * :data:`KAS_TURN_REFUSED`: the turn runs on KAS while the stored sign-in is on
+      an edition's own start URL (``crew_client`` preview). The caller answers 503
+      before any history is cut; kiro-cli is never asked.
+    * :data:`KAS_TURN_READY`: :func:`kas_crew_signin_ready`.
+    * :data:`KAS_TURN_NOT_KAS_ROUTE`: every other turn, which the kiro-cli gate
+      decides exactly as on ``main``.
+
+    Arguments as :func:`kas_crew_signin_ready`. Never raises.
+    """
+    if live_route is not False and await asyncio.to_thread(
+        _registered_kas_turn_sync, session_key, live_route, config
+    ):
+        return KAS_TURN_REFUSED
+    if await kas_crew_signin_ready(session_key, live_route, config=config):
+        return KAS_TURN_READY
+    return KAS_TURN_NOT_KAS_ROUTE
+
+
 async def workload_turns_ready() -> bool:
     """Whether a workload host can serve a new chat turn with no kiro-cli login.
 
@@ -660,15 +720,26 @@ async def reject_if_kiro_unverified(
         live_route = None
     # The configuration the provider factory allocates the turn's session from.
     applied = getattr(getattr(state, "sessions", None), "_cfg", None)
-    if harness_turn and await kas_crew_signin_ready(session_key, live_route, config=applied):
-        _clear_refusal_warning()
-        return None
-    service = _service(request)
-    if await kiro_verified_ready(service, max_age_secs=max_age_secs):
-        _clear_refusal_warning()
-        return None
-    timed_out = isinstance(service, KiroPrerequisiteService) and service.probe_timed_out
-    body = _KIRO_PROBE_TIMED_OUT_RESPONSE if timed_out else _KIRO_NOT_READY_RESPONSE
+    body = None
+    if harness_turn:
+        verdict = await kas_turn_verdict(session_key, live_route, config=applied)
+        if verdict == KAS_TURN_READY:
+            _clear_refusal_warning()
+            return None
+        if verdict == KAS_TURN_REFUSED:
+            # Crew's own sign-in alone decides this turn: kiro-cli is not asked, and a
+            # rerun's history is not cut for a turn the spawn would refuse. Deferred:
+            # kiro_crew.auth must not load on the handlers' import path.
+            from kiro_crew.auth.login.endpoints import LOCAL_AGENT_UNAVAILABLE
+
+            body = {"error": LOCAL_AGENT_UNAVAILABLE, "code": KAS_TURN_REFUSED_CODE}
+    if body is None:
+        service = _service(request)
+        if await kiro_verified_ready(service, max_age_secs=max_age_secs):
+            _clear_refusal_warning()
+            return None
+        timed_out = isinstance(service, KiroPrerequisiteService) and service.probe_timed_out
+        body = _KIRO_PROBE_TIMED_OUT_RESPONSE if timed_out else _KIRO_NOT_READY_RESPONSE
     _warn_refused_once(_log_safe_path(request), body["code"])
     return web.json_response(body, status=503)
 

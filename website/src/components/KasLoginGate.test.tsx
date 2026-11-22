@@ -479,6 +479,24 @@ describe('KasLoginGate', () => {
     })
   })
 
+  it('warns before sign-in that a company portal with its own sign-in turns the local agent off', async () => {
+    kasLoginStatus.mockResolvedValue({
+      authenticated: false,
+      provider: null,
+      identity: null,
+      transport: 'device',
+      local_agent_off_start_urls: ['https://acme.awsapps.com/start'],
+    })
+    renderWithProviders(<KasLoginGate />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue with company SSO' }))
+    const field = await screen.findByLabelText('Company sign-in URL')
+    fireEvent.change(field, { target: { value: 'https://other.awsapps.com/start' } })
+    expect(screen.queryByTestId('kas-login-sso-local-agent-off')).toBeNull()
+    fireEvent.change(field, { target: { value: 'acme.awsapps.com/start/' } })
+    expect(screen.getByTestId('kas-login-sso-local-agent-off')).toHaveTextContent(/local agent is off/)
+    expect(kasLoginBeginDevice).not.toHaveBeenCalled()
+  })
+
   it('company SSO sends a start URL pasted without https:// for the gateway to complete', async () => {
     renderWithProviders(<KasLoginGate />)
     fireEvent.click(await screen.findByRole('button', { name: 'Continue with company SSO' }))
