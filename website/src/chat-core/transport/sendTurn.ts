@@ -217,6 +217,26 @@ export interface SendTurnOptions {
   wire?: SendWire
 }
 
+/** Each slot's main-chat sends (the dashboard wire, `POST /api/chat`) whose
+ *  POST has not been answered yet, so Stop can cancel them. A send on another
+ *  wire (Side Chat, an app embed) belongs to a different conversation with its
+ *  own stop, so it is not listed. A send leaves the set once its response
+ *  headers arrive: from then on the gateway holds it, and aborting the body
+ *  read would only turn a real receipt into `response-late`. */
+const pendingSends = new Map<string, Set<AbortController>>()
+
+/** Abort every unanswered send on `slot`. Called by Stop, so a message still
+ *  waiting on the network cannot start the turn the user just stopped. An
+ *  aborted send settles as `response-late`: a POST that already left the
+ *  browser may still reach the gateway. Says whether a send was aborted. */
+export function abortPendingSends(slot: string): boolean {
+  const sends = pendingSends.get(slot)
+  if (!sends) return false
+  pendingSends.delete(slot)
+  for (const c of sends) c.abort()
+  return sends.size > 0
+}
+
 /**
  * The one send implementation (chat-core transport layer).
  *
@@ -236,6 +256,16 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendReceipt> {
   const wire = opts.wire ?? dashboardSendWire
   // The old note goes on submit, so this send's own failure frame stays.
   if (opts.slot) clearCrewSteerNotice(opts.slot)
+  const slotSends = opts.slot && !opts.wire ? pendingSends.get(opts.slot) ?? new Set<AbortController>() : null
+  if (opts.slot && slotSends) {
+    slotSends.add(controller)
+    pendingSends.set(opts.slot, slotSends)
+  }
+  const answered = () => {
+    if (!opts.slot || !slotSends) return
+    slotSends.delete(controller)
+    if (slotSends.size === 0 && pendingSends.get(opts.slot) === slotSends) pendingSends.delete(opts.slot)
+  }
   try {
     const r = await wire(
       {
@@ -249,6 +279,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendReceipt> {
       },
       controller.signal,
     )
+    answered()
     const { body, outcome } = await readSendReceipt(r)
     if (outcome === 'refused') return { status: 'refused', body, reason: typeof body.error === 'string' ? body.error : undefined }
     // readSendReceipt deliberately converts an unreadable accepted body into
@@ -273,6 +304,7 @@ export async function sendTurn(opts: SendTurnOptions): Promise<SendReceipt> {
     if (e instanceof DOMException && e.name === 'AbortError') return { status: 'response-late', body: {} }
     return { status: 'transport-error', body: {} }
   } finally {
+    answered()
     clearTimeout(timeout)
   }
 }
