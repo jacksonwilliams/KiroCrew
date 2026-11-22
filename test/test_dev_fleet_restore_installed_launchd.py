@@ -419,13 +419,19 @@ async def test_an_untrustworthy_record_is_refused(monkeypatch, host, tamper):
 
 
 @pytest.mark.asyncio
-async def test_a_record_write_failure_refuses_the_cutover(monkeypatch, host):
+async def test_a_record_write_failure_still_cuts_over_and_restore_has_no_record(monkeypatch, host):
     def boom(*_a, **_k):
         raise OSError("read-only")
 
     monkeypatch.setattr(installer_launcher, "atomic_write", boom)
+    await _cutover(monkeypatch, host)
+    assert not host["record"].exists()
+    assert str(host["wt"]) in host["launcher"].read_text()
+    assert live_target.is_pinned()
+
+    before = host["pointer"].read_text(), host["launcher"].read_text()
     calls = _launchctl(monkeypatch)
-    res = await mod._make_live(str(host["wt"]))
-    assert res["ok"] is False and res["code"] == "write_failed"
-    assert host["launcher"].read_text() == host["installer"]
-    assert not host["pointer"].exists() and not _kills(calls)
+    res = await restore_installed._restore_installed()
+    assert res["ok"] is False and res["code"] == "restore_no_installer_record"
+    assert (host["pointer"].read_text(), host["launcher"].read_text()) == before
+    assert not _kills(calls)

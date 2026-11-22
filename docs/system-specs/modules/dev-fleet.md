@@ -2000,7 +2000,8 @@ choose the gateway's next image. Instead:
   (`installer_launcher.record_first_cutover`) as
   `~/.kiro/crew/live-target-staging/installer-launcher.json`
   (`{version, live_program, content}`), owner-only `0600` with one link, before
-  anything is staged; a write failure refuses the cutover. A newer installer launcher
+  anything is staged. A write failure is logged at warning level and the cutover
+  proceeds; Restore then answers `restore_no_installer_record`. A newer installer launcher
   (a later `service install` from another installation) replaces an older record; a
   cutover's own launcher is not the installer's and never does. The masked staging directory makes it as unreachable from
   an agent sandbox as the pointer. Restore reads it with `O_NOFOLLOW` and refuses a

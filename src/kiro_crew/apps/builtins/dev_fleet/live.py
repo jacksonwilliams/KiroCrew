@@ -1323,6 +1323,8 @@ async def _make_live_inner(
         if can_restart and isinstance(svc, gateway_service.LaunchdBackend):
             # The launcher about to be rewritten may be the installer's; keep it for
             # "Restore installed build", which cannot re-derive it from a worktree.
+            # A failed record never blocks the cutover: Restore then answers
+            # restore_no_installer_record and the owner reinstalls by hand.
             try:
                 await _off(
                     subprocess_executor(),
@@ -1331,15 +1333,12 @@ async def _make_live_inner(
                     prior_definition,
                 )
             except OSError as exc:
-                return {
-                    "ok": False,
-                    "code": "write_failed",
-                    "error": (
-                        "refusing make-live: the installed build's launchd launcher "
-                        "could not be recorded, so Restore installed build could not "
-                        f"put it back: {runtime._redact(str(exc))}"
-                    ),
-                }
+                runtime.logger.warning(
+                    "make-live: the installed build's launchd launcher could not be "
+                    "recorded, so Restore installed build will not be able to put it "
+                    "back: %s",
+                    runtime._redact(str(exc)),
+                )
 
         def _unwind_sync() -> bool:
             """Restore both staged surfaces. False when either did not land."""
