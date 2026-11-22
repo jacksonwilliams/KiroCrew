@@ -658,7 +658,13 @@ def _build_instances_config(
         max_recovery_attempts=section.read("max_recovery_attempts", _safe_int),
         recover_backoff_max_secs=section.read("recover_backoff_max_secs", _safe_float),
         probe_failure_threshold=section.read("probe_failure_threshold", _safe_int),
+        # A non-text value reads as unset, so a hand edit can never point it elsewhere.
+        managed_env_endpoint=_text_or_blank(instances_data.get("managed_env_endpoint")),
     )
+
+
+def _text_or_blank(raw: object) -> str:
+    return raw.strip() if isinstance(raw, str) else ""
 
 
 def _build_tunnel_config(tunnel_data: dict) -> TunnelConfig:
