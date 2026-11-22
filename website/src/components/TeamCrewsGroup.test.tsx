@@ -248,6 +248,17 @@ describe('TeamCrewsGroup', () => {
     expect(screen.queryByRole('button', { name: /Switch crew/i })).toBeNull()
   })
 
+  it('says the relay domain setting hid the listed Crews rather than that there are none (row 65)', async () => {
+    withBridge()
+    vi.spyOn(api, 'relayViewerCrews').mockResolvedValue({ crews: [], offDomain: 2 })
+    const client = mount()
+    await waitFor(() => expect(client.getQueryState(RELAY_VIEWER_CREWS_KEY)?.status).toBe('success'))
+    const u = userEvent.setup()
+    await u.click(await screen.findByRole('button', { name: /Switch crew/i }))
+    expect(await screen.findByTestId('relay-crews-off-domain')).toHaveTextContent('tunnel.relay_viewer_relay_domain')
+    expect(screen.queryByText('No Shared Crews to open.')).toBeNull()
+  })
+
   it('with no Team Crews listed, a menu of Local and SSH Crews has no group names and no Team Crews', async () => {
     withBridge()
     vi.spyOn(api, 'relayViewerCrews').mockResolvedValue({ crews: [] })
@@ -281,13 +292,21 @@ describe('TeamCrewsGroup', () => {
     expect(within(group).getByTestId('relay-crew-not-connected').textContent).toBe('Not connected')
   })
 
-  it('names My Crews only when SSH Crews are listed', async () => {
+  it('lists SSH Crews and Team Crews under one Remote Crews heading, the SSH row read as Private', async () => {
     withBridge()
     vi.spyOn(api, 'relayViewerCrews').mockResolvedValue({ crews: [crew({})] })
     mount([sshCrew({ was_connected: true })])
     const u = userEvent.setup()
-    await openGroup(u)
-    expect(screen.getByText('My Crews')).toBeTruthy()
+    const group = await openGroup(u)
+    // One heading over both kinds of row, and no "My Crews" group.
+    expect(screen.getAllByText('Remote Crews')).toHaveLength(1)
+    expect(within(group).queryByText('Remote Crews')).toBeNull()
+    expect(screen.queryByText('My Crews')).toBeNull()
+    // The SSH row reads as a Private relay row does, with its source tag.
+    const sshRow = screen.getByRole('menuitemradio', { name: /Cloud One/ })
+    const privateLine = within(sshRow).getByTestId('crew-row-private')
+    expect(privateLine.textContent).toMatch(/^Private · SSH/)
+    expect(privateLine.querySelector('svg')).not.toBeNull()
   })
 
   it('shows the bar with the Team Crews group while the instances feature is off', async () => {

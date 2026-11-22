@@ -84,6 +84,10 @@ export function parseHostModel(data: unknown): HostModel | null {
       // and have nothing to say about it. Absent is legitimate -- an older host,
       // and a healthy chain -- so the label falls back to the bare word.
       brokenAt: typeof t.brokenAt === 'string' ? t.brokenAt : undefined,
+      // One of three words or nothing: an unknown value shows the host alone.
+      transport: t.transport === 'ssh' || t.transport === 'ssm' || t.transport === 'fargate'
+        ? t.transport as 'ssh' | 'ssm' | 'fargate'
+        : undefined,
     }))
     .filter(t => t.id)
   const rawSelf = d.self && typeof d.self === 'object' ? (d.self as Record<string, unknown>) : null
@@ -120,6 +124,8 @@ export function parseHostModel(data: unknown): HostModel | null {
       ? d.pinnedCrews.filter((id): id is string => typeof id === 'string')
       : [],
     relayCrews: parsePaneRelayCrews(d.relayCrews),
+    // Absence -> false: an older host sends no failure, and the group shows as before.
+    relayCrewsFailed: d.relayCrewsFailed === true,
     // Tri-state, mirroring `focusMode` above: a non-boolean (typically absent)
     // means the host predates this relay, so it has no `mc-set-stable-order`
     // handler either. `null` records "no opinion" so the bar can order by the

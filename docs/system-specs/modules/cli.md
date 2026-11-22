@@ -727,7 +727,7 @@ module outside the snapshot family imports an owner.
 | `kirocrew cron history <id> \| --all [-n N] [--status S] [--run RUN] [--json]` | Read-only view of a job's past runs, or every job's with `--all` (`cli_cron_history.py`). It reads `CronService.get_history()` through the three public `CronHistoryStore` readers the dashboard routes use (`get_job_history`, `get_all_history`, `get_run_detail`) and redacts `job_name`, `summary`, `error` and `trace` as those routes do, so it shows nothing the Schedule page hides. One line per run, newest first: start time, status, duration, `run=<id>` and the first line of the error, else the summary; every untrusted text passes `safe_terminal_line`. `--status` (`success`, `failure`, `timeout`, `cancelled`, or `error` for every run that did not succeed) filters before `-n` (default 20) is applied, so `total` in `--json` (`{"runs": [...], "total": N}`) counts the filtered runs. `--run RUN` prints that run's full record, trace included. Exit 0, including when no run is recorded; 1 when the store is not readable from this process (the store is disabled, a denial disabled it during the read, or the read came back empty in a process with agent-confinement evidence (`cron_history._sandbox_confined`): the sandbox masks `cron-history`, on Linux with an empty writable directory the store accepts, so "no runs" there would be false; a confined process that does see runs prints them), when the read fails with any other `OSError` (`EIO`, `EMFILE`, ...: the store stays enabled, so `CronHistoryStore.last_error`, which `_degrade` sets, is what tells it from an empty history), for an unknown `--run`, a job id that resolves outside the store, or `--run` with `--all`; 2 for an argparse error. |
 | `kirocrew cron adopt <id> --session-of SESSION \| --release` | Give a job an owning chat session (a dashboard slot name or a full session key), so that session can manage it and receives its results; `--release` clears the owner, back to CLI/dashboard-only management |
 | `kirocrew cron preview <script> [-m MSG] [-e K=V]` | Run a script cron locally with real MCP tools; notifications are printed instead of delivered, and the session calls and `crew_log_append()` are printed, redacted, instead of made and return stand-ins of production's shape. The preview context keeps every public `ScriptContext` method with production's parameter names, kinds and defaults, pinned by `test/test_cron_preview_cmd.py` |
-| `kirocrew resource-subs list/remove <id>` | The operator's view of MCP resource subscriptions ([rfc-mcp-resource-subscriptions](../../request-for-change/rfc-mcp-resource-subscriptions.md) §4.9.3), in `cli_resource_subs.py` and dispatched through a function-local import. `list` reads the store under the data home, which every change is written to before it is published, so it works with no gateway running. `remove` asks the running gateway's operator route first, so the holder lets go of the URI; it edits the store directly only after a refused connection or an explicit `running: false`, then sends the request once more, holding no store lock, so a service that started and loaded the subscription before the edit lets it go too. A service still starting is asked again within the command's 30 s bound, and a second answer that cannot confirm no service holds the subscription exits non-zero. A starting service refuses with retry guidance. A running service whose removal does not commit returns `gateway_unavailable` with retry guidance, and the CLI exits non-zero without claiming removal. So does a removal that cannot start within 20 s because another subscription change holds one of the service's locks: it is refused rather than queued past the CLI's 30 s timeout, with nothing in memory, on disk or on the holder changed. A timeout, HTTP failure, unreadable reply or a peer the [owner-verified send](#owner-verified-secret-sends) cannot prove also exits non-zero without editing the store. The operator route acts across sessions, so the secret and a missing `X-Session-Key` are not enough: the gateway also verifies the process on the other end of the connection as the host owner from the kernel's peer identity (`member_memory_auth.local_owner_bootstrap_provenance`, the check `/api/token/local` mints on; app backends refused). Run from an agent's shell or a sandbox, it answers 403 `operator_unverified`, and the CLI prints that code and exits 1 without editing the store. A running service whose start could not read the store refuses with `store_unavailable`, and the CLI exits 1 without editing the store. Exits 1 for an unknown id. |
+| `kirocrew resource-subs list/remove <id>` | The operator's view of MCP resource subscriptions ([rfc-mcp-resource-subscriptions](../../request-for-change/rfc-mcp-resource-subscriptions.md) §4.9.3), in `cli_resource_subs.py` and dispatched through a function-local import. `list` reads the store under the data home, which every change is written to before it is published, so it works with no gateway running. `remove` asks the running gateway's operator route first, so the holder lets go of the URI; it edits the store directly only after a refused connection or an explicit `running: false`, then sends the request once more, holding no store lock, so a service that started and loaded the subscription before the edit lets it go too. A service still starting is asked again within the command's 30 s bound, and a second answer that cannot confirm no service holds the subscription exits non-zero. A starting service refuses with retry guidance. A running service whose removal does not commit returns `gateway_unavailable` with retry guidance, and the CLI exits non-zero without claiming removal. So does a removal that cannot start within 20 s because another subscription change holds one of the service's locks: it is refused rather than queued past the CLI's 30 s timeout, with nothing in memory, on disk or on the holder changed. A timeout, HTTP failure, unreadable reply or a peer the [owner-verified send](#owner-verified-secret-sends) cannot prove also exits non-zero without editing the store. The operator route acts across sessions, so the secret and a missing `X-Session-Key` are not enough: the gateway also verifies the process on the other end of the connection as the host owner from the kernel's peer identity (`member_memory_auth.local_owner_bootstrap_provenance`, the check `/api/token/local` mints on; this route also refuses an app backend, which the mint admits). Run from an agent's shell or a sandbox, it answers 403 `operator_unverified`, and the CLI prints that code and exits 1 without editing the store. A running service whose start could not read the store refuses with `store_unavailable`, and the CLI exits 1 without editing the store. Exits 1 for an unknown id. |
 | `kirocrew workspace list/delete <name>` | `list` prints each workspace's name and directory, the default one marked `*`. `delete` removes only the `workspaces` entry from `config.json`, never its directory, and refuses (exit 1, SEL `denied`) a name that does not exist, the default workspace, or one an agent still binds; the default and agent checks run again inside the config lock. |
 | `kirocrew workspace create/update --dir <name>` | `--dir` is a directory NAME that must resolve to a **strict descendant of the data home** (`~` is expanded first); anything landing outside — and the home **root itself**, in any spelling — is refused with a SEL `denied` audit event. Containment, not an absolute-path ban: an absolute path *under* the home resolves where the relative form would and is accepted. The strict-descendant test is what closes the root case for tilde paths, since the per-call-site root-equality checks compare un-expanded `config_dir() / ws_dir`. A symlink or junction at the final directory name is refused (CLI exit 1; dashboard 409 `workspace_dir_not_a_directory`), while linked parent directories are followed. Deliberately stricter than the dashboard's `POST /api/workspaces`, which accepts an absolute `dir` anywhere, screened by `is_sensitive_path`. A bare `kirocrew workspace` or an unknown sub-action prints its usage line to stderr and exits 2. |
 | Workspace directory materialization | The declared directory is materialized before its configuration entry is committed. **Create** does this with one atomic `mkdir` immediately before the config write, in the same locked section, made relative to the **pinned** parent (`pinned_fs` discipline: each parent component is opened `O_NOFOLLOW` from the path as validation resolved it, so a component swapped for a link between validation and the mkdir is refused rather than followed; where the platform cannot pin, Windows, the create is by name). An existing **directory** is adopted (pointing a new workspace at a folder the owner already keeps is supported, and is the normal case for an absolute `dir`); a path that exists and is **not** a directory is refused, as is a missing **parent**, rather than fabricating a tree. The created directory is **not** rolled back when the config write fails: it is reachable only through the entry written in that same section, so a failure leaves an empty directory nothing references, and deleting it would race a concurrent create that has adopted and registered the same path. The same rule holds for a `--copy-from` create whose config write fails after the copied tree was installed: the tree is left in place and its path is reported (CLI stderr note; handler warning log), because a concurrent create can already have adopted and registered it and deleting it would leave that workspace declared with no directory. A `--copy-from` staging copy that was never installed (the copy failed, the in-lock check or the publish was refused, or the config write failed before the install) is removed with `platform_compat.rmtree_force`, since it keeps the source's `.git`; when a file another program holds open keeps it, the CLI prints `Note: could not remove the partial copy at '<path>'; delete it by hand.` to stderr and the handler logs a warning naming the folder. **Update** does the opposite half: it REFUSES a `dir` that is missing or is not a directory (`workspace_dir_unusable`; CLI exit 1) instead of creating one, because it names a destination the owner already chose and its transaction carries no rollback. Consequence: "rebind first, create the folder after" is not a valid sequence — create makes its own directory, update binds one that exists. Residual gap: writers that reach the `workspaces` section without going through these two commands (`config edit`, keyed `config set workspaces.<name>.dir`, a backup restore) can still commit an entry naming a missing directory; `config set --file` refuses a new or changed one (`ConfigWriteRefused`, exit 1). |
@@ -1449,7 +1449,8 @@ represent. This is an authorization surface: OSC 52 writes the clipboard, and
 CSI can move the cursor and erase what is drawn, so a model-authored title could
 otherwise repaint the question a human is answering and hide what is being approved.
 Scope is the permission prompt only — ordinary streamed model output is printed
-raw by `_send_and_print` and is unchanged, which is a surface-wide rendering
+raw by `_send_and_print` (it drops only a line that quotes a session-directive
+marker, `QuotedDirectiveFilter`) and is unchanged, which is a surface-wide rendering
 question rather than part of answering a permission request.
 
 **An authorization-boundary failure is itself a refusal.** If the shared gate
@@ -1969,7 +1970,11 @@ One flag is a MODE rather than a check and short-circuits before the list above 
    flag lets a real update discard diverged work, it does not delete commits
    when there is nothing to update to). An unreadable comparison refuses
    (fail closed). Uncommitted tracked changes still prompt before being
-   discarded — and because that prompt makes the gap to the reset unbounded,
+   discarded: the prompt counts the changed files, lists the first ten, says
+   that answering N keeps them, and names the way to keep them and still
+   update (`git stash`, the same `kirocrew update` command, `git stash pop`,
+   run in the checkout, whose folder it prints on a line of its own);
+   only an explicit `y` resets them away — and because that prompt makes the gap to the reset unbounded,
    the divergence count is re-taken immediately before the reset and refuses
    commits that appeared while the update was waiting (committing the listed
    edits in another terminal to rescue them is the natural response to the
@@ -2523,6 +2528,10 @@ owner-verified transport `update approve` uses. That route READS the quiescence
 census (see [slack-gateway](slack-gateway.md), "The restart idle check is a read,
 until its last ask"). While the gateway is busy the command prints the counts and
 asks again every 10s, for up to `--max-wait` (default 600s; `0` checks once).
+When its stdout is a terminal and the gateway names the work (`holders` in the
+answer), it adds the sessions and jobs the counts are, for example
+`(nightly-sync script (21 s))`, cleaned and redacted again on this side. A
+captured run prints the counts alone, and so does the busy marker line.
 An idle answer is asked a second time at once, before the restart, with `commit`: the
 gateway then pauses and fences new turns like the dashboard restart, so a turn admitted
 after the first answer reads busy on the second and is waited on (or, past `--max-wait`,
@@ -3723,7 +3732,20 @@ git config that names a command git would run, each with the checkout untouched
 
 `kirocrew status` queries the running gateway's `/api/status` endpoint
 and prints uptime, sessions, messages, tool calls, subagents, crons, lessons,
-and a memory line: the gateway's own resident set (`gateway_rss_mb`) and the
+and a memory line. Messages and tool calls are the process-wide `Stats` counts
+since the gateway started (`messages` and `tool_calls` in the status payload). A
+message is a turn a person starts from the dashboard, or an inbound message a
+channel receives: Slack and Telegram count at their transports, every other
+channel once the shared turn pipeline's governance backstop admits a message a
+person sent (before the session claim). The dashboard and the pipeline channels
+count under `messages_admitted`, so `messages` is `messages_received` plus
+`messages_admitted`. Not counted: a card or app-token send, a Continue or retry
+the runner queues, a script cron's send, a Discord or Teams message that reaches
+a resumed dashboard session mid-turn, and, on the dashboard and the pipeline
+channels, a message folded into a turn already running. Queued messages that
+`merge_queued_messages` joins into one turn count once, or not at all when a
+channel message is in the batch. A tool call is counted once, when it finishes.
+The memory line is the gateway's own resident set (`gateway_rss_mb`) and the
 per-session tree ceiling the cleanup watchdog recycles at
 (`watchdog_rss_max_mb`, spelled out as disabled when `0`). Both fields are
 published by `/api/status` for this line; `kirocrew doctor` prints the same two
@@ -3955,6 +3977,16 @@ than minting one.
 real sign-in or a team key, and a Crew with a team key hosts through the Kiro relay
 by default, so without this every such gateway would register with the production
 relay. `cli_gateway_boot._resolve_gateway_args` forces `no_tunnel` for both.
+
+**A `--test-mode` gateway on its own data home gets its own Kiro home too.**
+`KIROCREW_HOME` moves only the data home; `config.paths.kiro_home()` still names the
+real `~/.kiro`, so the Bots a test gateway creates would land in the real
+`~/.kiro/mates/agents` and its owner record. Before the platform boot resolves it,
+`cli_gateway_boot._isolate_test_mode_kiro_home` sets `KIRO_HOME` to
+`<data home>/kiro`, the value a pod gets (`pod.runtime.build_pod_env`). It leaves
+alone a run without `--test-mode`, one whose `KIRO_HOME` is already set, and one whose
+data home is unset or is a main gateway home (`seed._protected_homes`: `~/.kiro/crew`
+or the legacy `~/.kirocrew`), which shares the real Kiro home on purpose.
 
 **`--approval yolo` refuses to start unless `KIROCREW_HOME` is explicitly set to a
 non-default path.** The flag disables every per-call approval, so pointing it at the

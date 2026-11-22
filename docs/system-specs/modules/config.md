@@ -1541,8 +1541,8 @@ Contract:
   (`mc-keyboard-shortcuts`), the macOS digit modifier (`mc-mac-ctrl-digits`),
   the Search everywhere chord (`mc-quicksearch-shortcut`), and the panel
   toggle chords
-  (`mc-panel-toggle-shortcuts`), and the push-to-talk key (`mc-ptt-config`)
-  on Settings > Voice. The push-to-talk binding is positional and the
+  (`mc-panel-toggle-shortcuts`), and the push-to-talk key with the
+  message-box hold setting (`mc-ptt-config`) on Settings > Voice. The push-to-talk binding is positional and the
   platform defaults differ, so a client that inherits another machine's
   binding (a Mac client's bare right Option does not arm on most Windows and
   Linux layouts) changes it once; that one change costs less than
@@ -1875,7 +1875,8 @@ keys`. Three exclusions from that warning are named in code:
 - `validation._CORE_OWNED_TOP_KEYS` (`voice_reply`, `connections`, `sel`) — a section this core
   reads but does not model as a field, written by the settings UI or by hand as the docs say. The settings UI persists it
   (`slack/interactions_modals.py`, `dashboard/chat_voice.py`) and the gateway reads it
-  back on startup via `load_voice_reply_config` (`slack/handler_runtime/voice.py`,
+  back on startup, and again on every live change under `voice_reply`, via
+  `load_voice_reply_config` (`slack/handler_runtime/voice.py`,
   and read by `telegram/transport_dispatch.py`). Captured and round-tripped like any unknown
   section, and NOT reported as unrecognized because the product wrote it, or told the
   operator to.
@@ -1929,7 +1930,7 @@ an underscore, or appears in one of two explicit maps in `resolution.py`:
 | map | why the key is excluded |
 | --- | --- |
 | `_SECTION_KEYS_EMITTED_ELSEWHERE` | `to_dict()` writes it from outside the section dataclass, either conditionally (`slack.channels`, `dm_activation`, `trusted_bot_ids` — absence is a deliberate deletion) or from the top-level object (`slack.observe_max_messages`, `observe_ttl_hours`). |
-| `_SECTION_KEYS_DELIBERATELY_DROPPED` | The build chose not to round-trip it. The union of `_SECTION_KEYS_RENAMED` (`knowledge.auto_ingest_doc_links`: still read, so only `save()` drops it, writing the canonical spelling) and `_SECTION_KEYS_RETIRED` (the removed local-STT install paths, the retired `knowledge` folder-discovery keys — re-persisting them would keep offering a setting with nothing behind it). The Settings PATCH and PUT and `kirocrew config set` also drop the RETIRED keys (`drop_retired_section_keys`), and with them the retired entries of a map-valued key in `_MAP_ENTRIES_RETIRED` (`dashboard.feature_previews.layout_harness`); other raw writers leave them in place. |
+| `_SECTION_KEYS_DELIBERATELY_DROPPED` | The build chose not to round-trip it. The union of `_SECTION_KEYS_RENAMED` (`knowledge.auto_ingest_doc_links`: still read, so only `save()` drops it, writing the canonical spelling) and `_SECTION_KEYS_RETIRED` (the removed local-STT install paths, the retired `knowledge` folder-discovery keys — re-persisting them would keep offering a setting with nothing behind it). Every `update_config_locked` write to `config.json` also drops the RETIRED keys (`drop_retired_section_keys`), and with them the retired entries of a map-valued key in `_MAP_ENTRIES_RETIRED` (`dashboard.feature_previews.layout_harness`), so a raw edit such as `kirocrew config defaults --adopt` keeps the load-time warning's promise. Where a spec or the code says a writer touches only its own keys or installs a file whole (`config set --file`), a retired key, which nothing reads, is the exception. Only `update_config_locked` writes (and `save()`) drop them: `config.local.json`, and a `config.json` written any other way (for example a restore or settings import that copies the file in as it is, or the load-time write-back of a `config.json` outside the data home), keep them until the next such write. |
 
 A key the schema DOES model but validation rejected also stays dropped, because
 re-emitting it would make the bad value permanent and re-warn on every load.
@@ -2951,7 +2952,12 @@ name:
 ```
 
 - Read/written via `kiro_crew/agent_state.py` (atomic, lock-guarded near-leaf
-  module: stdlib + `config.paths` + `atomic_write` only).
+  module: stdlib + `config.paths` + `atomic_write` + `unchanged_file` only). A write whose bytes
+  already sit in the file (owner-only, one link) is skipped, and
+  `begin_managed_write` records no pending digest for bytes that reproduce the
+  finalized one, so a rebuild that changes nothing keeps the file's inode. The
+  sandbox pins this file for every spawn and refuses one whose pinned file was
+  replaced (security.md, the recreation table).
 - `build_agent_config()` is pure (writes no spec key); `rebuild_agent_config()`
   seeds managed-state on a fresh/clean install (never clobbering a frozen pick).
 - `_refresh_dynamic_fields()` sources managed-state from the sidecar and strips
@@ -3445,6 +3451,13 @@ live in `dashboard/server_runtime/config_watch.py::_register_config_watch` — `
 `dashboard.dynamic_dashboard_cards` (→ `DashboardState.set_dynamic_cards_enabled`),
 `dashboard.command_bar_enabled` and `dashboard.channels_enabled` (→ a `config` refresh frame,
 since the shell reads each from the shared config query, which never goes stale on its own),
+`voice_reply` (→ `slack/handler_runtime/voice.py::apply_voice_reply_change`, which reads
+config.json once, strictly, off the loop and applies it with config.local.json merged over it
+through `_adopt_voice_reply`, the step `load_voice_reply_config` also ends in;
+a config.json that does not parse leaves the Slack voice state as it was and the applier
+raises `ConfigDeferred` for its paths, while an unparseable overlay contributes nothing, as
+the loader treats it; the watcher diffs the base view, so an edit to config.local.json alone
+reaches it only at restart),
 `dashboard.terminal.enabled` (→ `handlers/terminal_lifecycle.py::apply_terminal_enabled`, run
 off the cycle like the provider switch below, since ending a shell can outlast the bound), and
 `agent.model_context_tokens` (→ `model_registry.apply_operator_windows`, process state of

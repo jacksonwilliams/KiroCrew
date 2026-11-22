@@ -492,8 +492,12 @@ lets all your chats use one copy of a server instead, which saves memory when ma
 chats are open. A shared copy runs outside each chat's sandbox, with your access, so
 share a server only if you added it yourself and its command is what you expect.
 
-**Share MCP servers across chats** is the switch at the top of the page
-(`mcp_gateway.enabled`). Turning it on asks first and lists every server it will
+**Turn on MCP server sharing** is the switch on the
+**Share MCP servers across chats** card at the top of the page
+(`mcp_gateway.enabled`). The card's diagram
+shows the difference: off, each chat runs its own copy of a server; on, all chats
+use one copy. A link can open the card directly at
+`/capabilities?tab=mcp-servers&view=sharing#mcp-sharing`. Turning it on asks first and lists every server it will
 share: the ones you turned on by hand, plus the shareable ones nobody chose for. It
 never turns on a server you turned off by hand, a server that hands out
 credentials, or one that waits for your OK. **Memory now** and **Memory with
@@ -502,8 +506,9 @@ already open keep their own copies until you reload them: the banner under the
 switch offers to reload them, and skips a chat that is busy.
 
 When servers wait for your OK, a card counts them. **Review and approve** opens
-them in a dialog, each with **Approve** (one copy runs it for all chats, outside
-their sandbox) and **Skip** (it keeps running inside each chat). There is no
+them in a dialog, each with **Share across chats** (one copy runs it for all
+chats, outside their sandbox) and **Don't share** (it keeps running inside
+each chat). There is no
 approve-all.
 
 The **Sharing** view, beside **Servers** under the card, holds the rest. In
@@ -511,7 +516,8 @@ The **Sharing** view, beside **Servers** under the card, holds the rest. In
 the **Share** column, named **Enable MCP sharing** (`mcp_gateway.stub_servers`,
 which [MCP Apps](mcp-apps.md) calls routing). Turning it on reads the command the
 server runs and approves exactly that launch; the row's **Details** shows it, with
-env names only, never their values. A row's state is one of:
+env names only, never a secret value. When a server's PATH changes, Details names
+the folders added and removed. A row's state is one of:
 
 | State | Meaning |
 |---|---|
@@ -519,7 +525,7 @@ env names only, never their values. A row's state is one of:
 | **direct** | Each chat starts its own copy. A row with Share on also reads **direct** while the switch at the top is off, when its env names a vault secret, or when it needs a setting each chat keeps |
 | **Can't share** | It has no stdio pipe, it hands out credentials, or its command cannot be approved here, such as when too many agents start it with different settings (the row names the limit and the way back) |
 | **Paused · command changed** | Its command or settings changed since you approved it, so it runs inside each chat until you press **Approve update** |
-| **Paused · not approved yet** | It was added in a config file and never approved here; **Approve** shares it |
+| **Paused · not approved yet** | It was added in a config file and never approved here; **Share across chats** shares it |
 
 A paused row has no switch. It offers its approve button and **Don't share this
 server**, which takes the mark off and approves nothing. A row that cannot share

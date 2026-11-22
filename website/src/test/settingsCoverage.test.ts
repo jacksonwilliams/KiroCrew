@@ -66,6 +66,7 @@ function readPanel(file: string): string {
  * an unlisted file fails, so the choice is always conscious.
  */
 const UNMAPPED_PANELS: Record<string, string> = {
+  'remoteCrewTunnelError.tsx': "a Remote Crew row's connect-failure text (one sentence, the raw error folded under it); zero controls, no setting",
   'BrowserEngineSection.tsx': "the Browser tab's Engine row under More (Harness and Chromium versions) with a Redownload action; status and one action, no setting of its own",
   'BrowserStatusCard.tsx': "the Browser tab's main card (browser, status dot, one state-dependent Install / Retry / Allow / Connect / Disconnect action); it reports the engine and holds no setting",
   'KiroHarnessFallbackNote.tsx': 'informational note ChatPanel mounts above the fallback pickers on a Kiro harness, zero controls',
@@ -84,6 +85,7 @@ const UNMAPPED_PANELS: Record<string, string> = {
   'McpManagementLaunchReview.tsx': "McpManagement.tsx's launch review and refused-row panels, per-server approvals rather than settings, rendered on the MCP Servers page (`/mcp`)",
   'McpManagementCwdQuestion.tsx': "McpManagement.tsx's working-folder question dialog, a per-server answer asked before sharing, rendered on the MCP Servers page (`/mcp`), zero settings",
   'McpManagementHero.tsx': "McpManagement.tsx's hero, reload banner and approval card, rendered on the MCP Servers page (`/mcp`), zero settings",
+  'McpShareDiagram.tsx': "the MCP sharing hero's non-interactive Off/On picture of what sharing does, rendered on the MCP Servers page (`/mcp`); no controls",
   'MobileLoginCard.tsx': 'mint-a-sign-in-link action card; the link it returns is a one-time credential, not a persistent setting',
   'OptionalSdkCard.tsx': 'read-only install-command card the Feishu, Teams and WhatsApp panels mount when their optional SDK is missing; a copy button and, for Feishu on the desktop app, a one-shot Install action, no setting and no control writes a config path',
   'PeoplePanel.tsx': 'read-only list of who has used this Crew and where access is managed; no setting and no control writes a config path',

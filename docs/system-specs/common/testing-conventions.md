@@ -981,6 +981,22 @@ for (const step of steps) {
 - **Prove both directions in the PR.** Make the bug in the product file and show the
   test red; add a legal new member without touching the test and show it green.
 
+Bad, a split-time list compared both ways with a class's live members, so a new
+member fails until it adds a line:
+
+```python
+assert sorted(present ^ set(_MEMBERS)) == []
+```
+
+Good, the snapshot may only lose entries, and the rules every member must keep are
+read off the class (`test/test_acp_bindings.py`):
+
+```python
+assert sorted(set(_MEMBERS) - present) == []       # no split member was lost
+assert _placement_gaps(AcpProvider, OWNERS) == []  # each lives in its owner, same name
+assert _rebound_names(_facade_class()) == []       # the class body binds each name once
+```
+
 What stays, and why:
 
 | Kind | Example | Why it stays |
@@ -988,7 +1004,7 @@ What stays, and why:
 | Ratchet | `test/wait_discipline_baseline.txt`, `_ALLOWED_DROPS`, per-site bypass baselines | It may only shrink; a new bad site is what it refuses ([Merge-safe ratchets and counts](#merge-safe-ratchets-and-counts)) |
 | Review list | the [whole-tree registration pins](#a-whole-tree-registration-pin-not-selected-by-diff-relevance) for link screens and port verdicts | A new dangerous site is meant to make a person look |
 | Contract | wire protocol values, a telemetry schema, persisted settings values, a platform fact | Adding or dropping one silently is a defect. Say which contract in a one-line comment |
-| Frozen snapshot | the names a facade served when its file was split | Nobody edits it again |
+| Frozen snapshot | the names a facade served when its file was split | Nobody edits it again. It checks the snapshot is still a subset of the live set, never equal to it, or every new member edits it |
 
 Enforced by the flake-pattern ratchet: K22 counts, in a Python test, an `assert` or
 `assertEqual` that pins a public ALL-CAPS name imported from `kiro_crew` (or read
@@ -5082,15 +5098,19 @@ measured an hour earlier is not a baseline.
    suite-wide win came from.
 2. **Function-scoped construction of an immutable, expensive thing.** Real `git`
    repos are the worst offender here: seeding one costs ~1–1.6s in subprocesses, paid
-   per test. Build it **once** in a `scope="session"` fixture and `shutil.copytree` it
-   per test. This is safe only if the template is never handed to a test: copy from
-   it rather than yielding it, so nothing one test does can reach another's. Re-point any
-   absolute path the tool recorded (e.g. `git remote set-url`) in the copy. On Windows
-   the copy also needs a `git reset --hard HEAD`: the copied files get fresh inode and
-   ctime values, git's index stat cache no longer matches, and the copy reads as having
-   "unstaged changes" -- `git rebase` refuses outright (MEASURED in `test_push_guard`
-   when its repo pair moved to a session template). Nothing in a template is
-   uncommitted, so the reset changes no content; it only re-stats the index.
+   per test. Build it **once** and copy it per test with `copy_repo` from
+   `test/git_repo_templates.py`: from a `scope="session"` fixture of your own, or through
+   the `repo_templates` fixture when the repo is built under the test's own git
+   environment (it keeps one template per builder, key and git identity). This is safe
+   only if the template is never handed to a test: copy from it rather than yielding it,
+   so nothing one test does can reach another's. Do not follow the copy with git:
+   `copy_repo` re-points every absolute path git recorded (a remote URL, a worktree's
+   pointers, `alternates`) at the copy and gives each copied index the copied files'
+   stat data, in process. Each of those cost a git spawn per test, about 0.26 s on the
+   Windows runner (`git remote set-url`, and the `git reset --hard HEAD` a copied
+   checkout needed because its files' new inode and ctime read as "unstaged changes").
+   The first copy of every template is checked with `git diff-files`, so a platform
+   where the in-process form does not hold fails the test.
 3. **A production timeout or poll the test never asserts on.** Fake fixtures are often
    small enough to trip a real retry heuristic, then pay its full budget every test.
    `monkeypatch` the interval to `0`: the branch still executes, only the waiting
@@ -5253,9 +5273,11 @@ git diff --stat "$f"                     # should show only what you had before
 ### Shard balance
 
 `ci.yml` assigns the backend suite to eight whole-file shards on Linux and Windows
-using `scripts.ci_file_shards`. Ownership is SHA-256 of the root-relative POSIX
-path, not a duration or test-count balance. Other shards skip the file before
-import, while discovery patterns and platform ignores remain pytest's own.
+using `scripts.ci_file_shards`. The default owner is SHA-256 of the root-relative
+POSIX path, not a duration or test-count balance; the pin files and a
+`--file-shard-targets` list (below) override it by measured time. Other shards
+skip the file before import, while discovery patterns and platform ignores remain
+pytest's own.
 
 The Linux full-suite run adds `--file-shard-pins scripts/ci_file_shard_pins.txt`:
 every file with a measured weight gets a fixed shard, placed so the eight shards'
@@ -5281,8 +5303,53 @@ full suite. Regenerate the Windows file when its shards drift apart: on 10 green
 `main` runs of 2026-11-19 and 2026-11-20, the file generated on 2026-11-19 left the
 heaviest Windows shard at a median 1.18x the mean test seconds, and a file planned
 from 9 of those runs and replayed on the one held out at 1.06x (#39955); no file
-outside the 800 took more than 30 s in any of them. macOS, release and the
-reduced and leaf scopes keep pure hash ownership.
+outside the 800 took more than 30 s in any of them. macOS and release keep pure
+hash ownership.
+
+A `--file-shard-targets` list (the reduced scope, the leaf corpus gates, the docs
+contract readers) is placed by neither hash nor pins: both are made for the whole
+suite, and on a small list two heavy files can share a shard and set the run's
+time. The plugin places the listed files by measured time, heaviest first onto
+the shard with the least time so far, with ties going to the shard holding fewer
+files, then the lower shard number, and equal weights ordered by path. Every
+shard computes the same placement from the list, the shard count and the
+platform's weights file: `scripts/ci_file_shard_weights.txt`, or
+`scripts/ci_file_shard_weights_windows.txt` on Windows. Each holds a file's
+measured test seconds, written by `scripts/ci_file_shard_pins.py` in the same run
+as the pin file (`--weights-out` writes it alone, beside a trial `--out`). A
+listed file with no weight gets the file's median, so new files spread too. The
+weights only move a listed file between shards; a stale one costs balance, never
+a test.
+
+A placement holds only if every shard of a run is given the same set of targets:
+a hash owner did not depend on the list, a placement does, and shards given
+different sets could each leave a file to another. No shard can see another's
+list, so each prints `file-shard targets: <N> file(s), sha256 <digest>; shard
+<i>/<n> owns <k>` in its terminal summary; the counts and digests of one run's
+shards must match. `--file-shard-targets-sha256=<digest>` turns that into a
+refusal: a shard whose list has another digest stops before collecting, and so
+does one given a value that is not a digest (an empty one means the run named
+none).
+
+`ci.yml` passes it with every list. The `changes` job runs once per run, and is
+not repeated when one failed shard is re-run, so its step "Digest the selected
+backend test lists" names the digest each list must have: the leaf corpus gates
+(one list on Linux and Windows), the reduced scope on Linux, the reduced scope
+on Windows (`scripts/ci-surface-tests.py --for-windows`, the Linux list without
+`test/windows-collect-ignore.txt`) and the docs contract readers. The selector's
+Windows list does not depend on the host that computes it: it matches test file
+names whatever their case by name, not through the host's glob, and prints UTF-8. The reduced
+scope and the docs readers are still worked out on each shard; the digest is
+what holds those copies to one list. Three outcomes fail a shard instead of
+falling back to the full suite, because the other shards have already left it
+its share of the list: its list has another digest, the run named no digest for
+a list it holds, or it holds no list (its selector failed or found nothing)
+while the run named one. When the selector fails in the `changes` job and on
+every shard, no list exists anywhere and the full suite runs, as before.
+`test/test_ci_shard_list_digest.py` executes those steps. Not covered: the
+Windows leaf budget in "Select test scope", which each Windows shard decides
+from the run's leaf outputs and the checkout, and which sends the shard to the
+full suite with no list.
 
 Before the Linux and Windows full-suite test step, `scripts/ci_rewrite_prewarm.py`
 writes pytest's assertion-rewrite pyc for the shard's test files (same hash and

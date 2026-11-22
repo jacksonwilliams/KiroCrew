@@ -59,6 +59,9 @@ export interface HostTab {
    *  connected and merely unreachable itself, so naming it would be false. Absent
    *  when the chain is healthy, and absent from an older parent's model. */
   brokenAt?: string
+  /** How the parent reaches this crew, for the row's "Private · <source>" line.
+   *  Absent from an older parent's model, whose rows then show the host alone. */
+  transport?: 'ssh' | 'ssm' | 'fargate'
 }
 
 /** The embedded pane's OWN tunnel status, used by its readout capsule (item 1). */
@@ -117,6 +120,9 @@ export interface HostModel {
   /** The parent's Remote Crews rows (lib/paneRelayCrews.ts), so the pane's own
    *  switcher lists them too; empty from an older host or with the relay viewer off. */
   relayCrews?: PaneRelayCrew[]
+  /** The parent's latest Remote Crews read failed; `relayCrews` are the last rows it
+   *  loaded, none on a first read. False from an older host. */
+  relayCrewsFailed?: boolean
   /** The parent's "keep tab order fixed" preference, relayed so the embedded bar
    *  applies the same ordering as the local bar instead of always reshuffling on
    *  switch (its own cross-origin-iframe localStorage the parent can never

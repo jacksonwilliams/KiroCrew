@@ -120,9 +120,11 @@ multi-GB, roughly-118-thread gateway, and runs Python bytecode in the child befo
 wedge before ever reaching `exec`, and a wedged child takes more than itself down:
 
 - `subprocess.Popen._execute_child` blocks in an unbounded `os.read(errpipe_read, ...)`
-  waiting for the child to exec or die. For `asyncio.create_subprocess_exec` that read runs
-  on the event loop thread with no `await` point, so no `asyncio.wait_for` can interrupt it
-  and the whole gateway stops.
+  waiting for the child to exec or die. For `asyncio.create_subprocess_exec` on a stock loop
+  that read runs on the event loop thread with no `await` point, so no `asyncio.wait_for` can
+  interrupt it and the whole gateway stops. The gateway loop builds each child on a worker
+  thread instead ([platform-compat](../system-specs/common/platform-compat.md#posix-gateway-spawns-build-their-child-off-the-event-loop)),
+  but the `fork()` itself still holds the GIL, and a wedged child holds that worker.
 - `_posixsubprocess`'s `child_exec()` runs `_close_open_fds()` *after* `preexec_fn`, so the
   wedged child still holds a duplicate of every inherited fd, `gateway.lock` and the
   dashboard's listening socket included, which then outlive the gateway.
@@ -625,15 +627,15 @@ locator forward.
 
 > **Two compositions of one Mach struct, on purpose.** `subagent._macos_vm_reclaimable_pages`
 > and `platform_compat.host_available_mib` both read `host_statistics64`, and they sum its
-> page counters differently. The budget's version is tighter — it does not re-add
-> `speculative_count` (which `free_count` already contains) and it bounds `inactive_count`
-> by `external_page_count`. The spawn memory floor reads the tighter version on macOS
-> (`subagent._host_available_gb`): the floor promises what stays free after a
-> start, and the looser sum read about 3.5 GiB above what a new process could take. The
-> sub-agent version is knowingly looser and stays that way for the TaskRunner's
-> memory-sized auto value, the auto cap's disabled-floor fallback and the memory posture,
-> numbers that are documented and that operators tune against. Do not "unify" those; only
-> the Mach call itself is shared.
+> page counters differently. The sub-agent version is the kernel's own available figure
+> (free + active + inactive: everything not wired and not compressed, what
+> `memory_pressure` reports). The spawn floor, the memory posture, the TaskRunner's
+> memory-sized auto value and the auto cap's disabled-floor fallback all read it, because
+> macOS compresses or swaps idle app pages on demand and its pressure level is the real
+> shortage signal. The budget's version is tighter (free + purgeable +
+> `min(inactive, external_page_count)`) and stays that way for the test-worker budget,
+> where a run must not push the host into swap. Do not "unify" those; only the Mach call
+> itself is shared.
 
 pytest-xdist resolves `-n auto` to the CPU count and never looks at memory, so on a
 many-core host a full-suite run inside an agent turn spawns one worker per core at roughly

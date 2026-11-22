@@ -958,8 +958,8 @@ function createIpcRegistrar({
     });
     ipcMain.on("theme-mode-changed", (event, pref) =>
       windows.chrome.setThemeMode(pref, event.sender));
-    ipcMain.on("titlebar-overlay-theme", (_event, mode) =>
-      windows.chrome.setTitlebarMode(mode));
+    ipcMain.on("titlebar-overlay-theme", (event, mode) =>
+      windows.chrome.setTitlebarMode(mode, event.sender));
 
     // Electron no-ops setBadgeCount on unsupported platforms. Keep the clamp in
     // the trusted process so a malformed renderer value cannot set an absurd
@@ -1482,6 +1482,22 @@ function createIpcRegistrar({
       // Before any mint, like a bad ID.
       if (!bounds) return { ok: false, error: "INVALID_BOUNDS" };
       return relayCrewOpener().open(endpointId, { parent, dashboard: parent._mcView, bounds });
+    });
+
+    // The warm set's background load: the main window's dashboard only, and never
+    // handed off, so no other window can bring the main one forward with it.
+    ipcMain.handle("relay-crew:prewarm-pane", async (event, endpointId, rect, viewport) => {
+      if (!isEndpointId(endpointId)) return { ok: false, error: "INVALID_ENDPOINT" };
+      try {
+        await assertLocalDashboard(event, "relay-crew:prewarm-pane");
+        assertMainWindowDashboard(event, "relay-crew:prewarm-pane");
+      } catch {
+        return { ok: false, error: "UNAVAILABLE" };
+      }
+      const main = windows.getMainWindow();
+      const bounds = paneRect(main, rect, viewport);
+      if (!bounds) return { ok: false, error: "INVALID_BOUNDS" };
+      return relayCrewOpener().prewarm(endpointId, { parent: main, dashboard: main._mcView, bounds });
     });
 
     // The calls that steer an open pane take it only from the dashboard view

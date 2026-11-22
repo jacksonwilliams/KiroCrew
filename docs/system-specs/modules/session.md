@@ -1717,7 +1717,8 @@ against sweep completeness, and are torn down at `close_all`.
   model's optional `note`) is the low-key, inspectable record that the turn
   ended on purpose; nothing is rendered as an assistant bubble. A linked Slack
   thread has no tool card, so the reply leg posts that outcome line there as the
-  turn's reply (see [slack-gateway](slack-gateway.md), "Linked Thread Sync"). A refused
+  turn's reply, except on a Bot's Heartbeat wake, which mirrors only a real reply
+  (see [slack-gateway](slack-gateway.md), "Linked Thread Sync"). A refused
   directive leaves the flag unset so the model
   falls back to a plain-text reply. The turn-end contract the base prompt states
   — a closing text, or `nothing_to_do`, never a bare stop after an ordinary tool
@@ -1811,7 +1812,16 @@ against sweep completeness, and are torn down at `close_all`.
   queued into the Bot's NEXT turn with `chat_utils.AUTOMATION_NOTICE_KIND`,
   so it drains as an `inject` row (never a `user` row shown as the person's own
   bubble) the turn carries, and the Bot can stop and re-arm the loop
-  itself. That inject row is model-only machinery: the Bot chat hides it
+  itself. A Bot's worker session (`members.is_crewmate_worker_session`) gets the
+  same delivery: nobody reads its transcript, and its Bot learns of it only
+  through the worker's own reports, so a refusal it never sees is a lost watch.
+  The notice and the delivery cover every arm, revision or stop that did not
+  land, whether it was refused, returned an `Error:` or raised. A stop that did
+  land is delivered too, in those two kinds of session only, as
+  `Automation loop stop applied: <outcome>`
+  (`session_directive_apply.STOP_OUTCOME_NOTICE_PREFIX`), because the stop tool
+  answers only "requested" and the agent could not otherwise tell a stopped loop
+  from a running one. `test_monitor_outcome_reaches_agent.py` pins all of it. That inject row is model-only machinery: the Bot chat hides it
   via `MACHINERY_ROLES` and every other surface suppresses it too
   (the app-sdk registry's `automation_notice_inject` draws nothing), so the raw
   `[Automation notice] …` text never appears as a row beside the refusal's own

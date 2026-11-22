@@ -3986,7 +3986,16 @@ them reads the tier off a cached row:
   to rank the row). An explicit refresh expires every manifest cache before it
   prewarms, so without this each refresh would re-clone the head of the index until
   the budget ran out and rows further down would never get their art; stale rows still
-  re-warm when the budget allows.
+  re-warm when the budget allows. When the batch budget cancels a row's in-flight
+  clone, the worker writes a `.budget-cancelled.json` marker beside the row's
+  manifest cache (no payload; its age is its mtime); an outer cancellation marks
+  nothing. A marked row that is not installed goes after the unmarked rows of its
+  own group, oldest mark first, and is never skipped, so the order is installed,
+  unmarked cold, marked cold, unmarked stale, marked stale: slow rows stop taking
+  every slot from rows not yet tried, and cold rows still go before stale ones
+  (#36688). A row that lands clears its marker,
+  and a marker no batch has renewed for `_PREWARM_BUDGET_MARK_TTL` (24 h) reads as
+  absent.
   Each retained candidate is slimmed to the fields a fetch and its
   caches read (`name`/`gitUrl`/`repo`/`branch`/`subdirectory`/`commit`/`_registry`),
   so a row's large `description` is not held for the batch's life; a retained field
@@ -4030,7 +4039,8 @@ them reads the tier off a cached row:
   `_CLONE_FAILURE_BACKOFF` (6 h — several index TTLs of quiet, far below the
   day-scale `_REWARM_AGE`), so a dead row stops stalling the hourly listing fetch
   instead of paying the full clone attempt every index interval. The
-  budget-cancellation path writes no record (a cancelled row is not a dead row),
+  budget-cancellation path writes no clone-failure record (a cancelled row is not
+  a dead row; it is only re-ranked),
   a later reaching clone removes the record, and an older or malformed record
   reads as absent so the row is retried once the window lapses. Both sidecar
   records (`.unobtainable.json` and `.clone-failed.json`) are read ONCE through a
@@ -4099,7 +4109,11 @@ Four properties keep the tier from becoming a hole, and none is optional:
 
 - **It cannot widen the reachable host set.** Every clone still passes
   `is_clone_host_trusted` first. The tier only decides whether credentials are
-  offered to a host that gate already allows.
+  offered to a host that gate already allows. Git LFS stays on that host too:
+  every registry git spawn carries `-c lfs.url=<endpoint derived from the clone
+  URL>` (`git_targets._lfs_endpoint_pin_argv`), which outranks a repository's
+  committed `.lfsconfig`, so its `lfs.url` or `remote.<name>.lfsurl` cannot send
+  the checkout's smudge step to another address.
 - **It is never index-supplied.** `_registry_trust_tier` reads the
   build-pinned registry row. A `trust` key on an index ENTRY
   is ignored — otherwise a hostile index would grant itself credentials. The
@@ -6264,8 +6278,9 @@ the way §18g chooses the pull-request client:
   nothing, so no request is sent. The diff of a picked file needs
   `/api/project/session-file-diff`; without it the diff's place shows its own refusal,
   worded as that file's changes, the row's Show changes, and the diff is never mounted.
-  Each refusal gives its reason first (the app's developer has not allowed it) and names
-  the undeclared path after it. The two paths are siblings at a slash boundary, so neither declaration
+  Each refusal gives its reason first (this app's developer has not allowed it), names
+  the undeclared path after it, and ends by telling the person to ask the app's developer
+  to add it. The two paths are siblings at a slash boundary, so neither declaration
   admits the other, and the scoped transport still checks each request.
 - **builtin**: the dashboard's client, as §18g keeps it for a builtin page.
 - **none**: the external answer with nothing declared, the refusal.
@@ -9099,7 +9114,10 @@ set changes is closed, so a withdrawn capability leaves no window opened with it
 - `localFiles`: `revealFile(path)` and `openImage(path)` run `app-local-files.js`, the one
   copy of the rules Mochi's shell windows use too: reveal only an existing regular file;
   open only a regular file whose resolved path carries an image extension, through
-  `openPathHardened`. A path is a string of at most 4096 characters with no NUL.
+  `openPathHardened`. A path is a string of at most 4096 characters with no NUL. Both
+  refuse a UNC name (a path that starts with two separators, such as `\\host\share\x`)
+  before any file-system call, as `context-menu.js` does, since on Windows a `stat` of
+  one opens an SMB session to the host it names.
 - `gatewayChoice`: `listGateways()` and `chooseGateway(id)` run `app-window-gateways.js`.
   The choice is kept per app in the shell's store (`appWindowGatewayChoices`), never on a
   gateway. A crew is a target only when core reports its tunnel connected, core's
@@ -9497,7 +9515,12 @@ but cannot be listed fences `apps/`. Only a declared leaf's own directory gets t
 `.tmp` / `.lock` rule, so for a directory entry that is `data/` itself, as for a
 built-in's. No listed row can name anything outside `apps/<name>/data/` or
 `apps/.<name>-data-tmp/`, and `security.sensitive_home_dirs()` keeps only the static
-rows, so a fence derived from that view keeps its scope. Below level 10 an installed
+rows, so a fence derived from that view keeps its scope. The write gate alone also
+refuses the files a fence comes from (`credential_masks.tool_gate_declarations`, added
+to the write-only rows by `agent_readonly_dirs.write_protected_home_paths` for both
+declarations): an installed `apps/<name>/app.json` or a retained record that declares an
+entry or does not read cleanly. They stay readable, and a manifest that declares nothing
+stays writable, so an agent can still add a fence. Below level 10 an installed
 app's masks are fenced by the OS sandbox only, so `scripts/adoption_pin.py` reports any
 `credentialMasks` as a level-10 use and a former built-in that declares one is pinned at
 `minAppSdkLevel` 10 or higher. Pinned by `test/test_app_credential_masks_tool_gate.py`.
@@ -9559,10 +9582,12 @@ host's grammar refuses the `/` ending (an empty segment), so it refuses to insta
 manifest rather than run the app with the directory unmasked; `scripts/adoption_pin.py`
 reports a directory entry as a level-8 use.
 
-**Residual.** The installed tree is sandbox-writable, so a mask is as strong as the
-manifest that declares it: an agent that rewrites an installed app's `app.json` drops
-that app's masks from the next spawn, as it could rewrite the app's code. Sealing an
-installed tree is a sandbox widening for the operator to choose. A declared file absent
+**Residual.** An agent's file tools cannot rewrite a fencing `app.json` or record (the
+write-only rows above, #38959), but the installed tree is still sandbox-writable, so a
+mask is as strong as the manifest that declares it: an agent's shell that rewrites an
+installed app's `app.json` drops that app's masks from the next spawn, as it could
+rewrite the app's code. Sealing an installed tree is a sandbox widening for the operator
+to choose. A declared file absent
 at spawn is not masked for that spawn, as for a core file leaf. Likewise a session that
 started while nothing of an app was on disk (before its install, or after a purge) carries
 none of its masks, directory entries included: a namespace gains no mount after launch, so
@@ -9738,7 +9763,8 @@ canonical root (`sandbox_plan.fold_crew_home_alias`), as the namespace plan fold
 lifts no core seal. The staged spelling is not handed back. An in-gateway backend (both
 built-ins below) runs outside every sandbox and is unaffected.
 
-**Residual.** §37's: the installed tree is sandbox-writable, so an agent that rewrites an
+**Residual.** §37's: the agent's file tools are refused a fencing `app.json` or record,
+but the installed tree is sandbox-writable, so an agent's shell that rewrites an
 installed app's `app.json` drops its declaration from the next spawn. A file inside a
 declared directory that already had a second hard link elsewhere before the seal is
 writable through that other name, as for a core `READONLY` directory. A link at a

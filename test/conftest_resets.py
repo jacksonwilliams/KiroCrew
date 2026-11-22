@@ -703,18 +703,20 @@ def _restore_autonudge_singleton():
 def _fresh_aws_bin_dir_trust(_floor_monkeypatch):
     """Start each test with the deploy engine's empty fallback-directory trust state.
 
-    ``deploy.engine`` keeps two process globals for the AWS tooling dirs: the
+    ``deploy.engine`` keeps three process globals for the AWS tooling dirs: the
     ``_TRUSTED_AWS_BIN_DIRS`` snapshot that every resolver walk, ``run_aws`` and
-    ssh spawn republishes, and ``_WARNED_AWS_BIN_DIR_REFUSALS``, the refusals
-    already logged. A test that builds a child env from an absolute head reads
-    the snapshot, so one an earlier test on the same worker left would decide
-    what that child's PATH holds. Patched only when the module is already
-    imported: importing it here would load the deploy engine into every test.
+    ssh spawn republishes, and ``_WARNED_AWS_BIN_DIR_REFUSALS`` and
+    ``_WARNED_AWS_TOOL_REFUSALS``, the refusals already logged. A test that
+    builds a child env from an absolute head reads the snapshot, so one an
+    earlier test on the same worker left would decide what that child's PATH
+    holds. Patched only when the module is already imported: importing it here
+    would load the deploy engine into every test.
     """
     engine = sys.modules.get("kiro_crew.deploy.engine")
     if engine is not None:
         _floor_monkeypatch.setattr(engine, "_TRUSTED_AWS_BIN_DIRS", ())
         _floor_monkeypatch.setattr(engine, "_WARNED_AWS_BIN_DIR_REFUSALS", set())
+        _floor_monkeypatch.setattr(engine, "_WARNED_AWS_TOOL_REFUSALS", set())
 
 
 @per_test_guard
@@ -1142,6 +1144,27 @@ def _reset_live_execution_records():
 
 
 @per_test_guard
+def _reset_subagent_memory_price_holders():
+    """Sizing must not inherit the settled rows of another test's managers.
+
+    Clear both the standalone owner and the facade without importing either:
+    the owner can be loaded before the facade composes its globals.
+    """
+
+    def clear():
+        for name in ("kiro_crew.subagent_parts.host_memory", "kiro_crew.subagent"):
+            module = sys.modules.get(name)
+            if module is not None:
+                module._MEMORY_PRICE_HOLDERS.clear()
+
+    clear()
+    try:
+        yield
+    finally:
+        clear()
+
+
+@per_test_guard
 def _reset_subagent_not_due_memo():
     """Start each test with no remembered not-yet-due runs from the tombstone sweep.
 
@@ -1154,6 +1177,27 @@ def _reset_subagent_not_due_memo():
         module = sys.modules.get("kiro_crew.subagent_persistence")
         if module is not None:
             module._NOT_DUE_MEMO.clear()
+
+    clear()
+    try:
+        yield
+    finally:
+        clear()
+
+
+@per_test_guard
+def _reset_chromium_opt_in_record():
+    """Start each test with no browser pid already opted in to page content.
+
+    Tests reuse fake pids, so a record one test left would make the next test's
+    snapshot of a Chromium browser skip the opt-in it should run.
+    """
+
+    def clear():
+        module = sys.modules.get("kiro_crew.computer_use.snapshot_macos")
+        record = getattr(module, "_CHROMIUM_OPT_IN_RETRY_AT", None)
+        if record is not None:
+            record.clear()
 
     clear()
     try:

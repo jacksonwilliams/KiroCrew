@@ -655,7 +655,8 @@ membership in that scope's file.
 Probes run from `POST /api/mcp/probe`. A server is probed as HTTP when
 `mcp_cleanup.mcp_transport_is_remote` reads it as remote (a `url` with a `type`
 of `http` or `sse`, or a `url` with a blank or absent `command`), the same rule
-the sharing rows and the gateway rewriter use; otherwise it is stdio.
+the sharing rows, the gateway rewriter and the KAS projection use; otherwise it
+is stdio.
 
 - **stdio** servers are spawned and driven through an MCP `initialize` handshake
   followed by `tools/list`. One of Kiro Crew's own servers that lists its tools
@@ -901,7 +902,9 @@ the sharing rows and the gateway rewriter use; otherwise it is stdio.
   (`connections/mint_kas.py`; see the connections spec). The check parses
   `<data_home>/kas/mcp-grants/.vault/secrets.enc` for its plain-text entry NAMES
   only, looking for `kiro.mcp.<sha256(url.trim().toLowerCase() + "|")>.tokens`.
-  The key file is never opened and nothing is decrypted, so only a boolean
+  The vault also holds the engine's organization (identity provider) sign-in,
+  `kiro.mcp.idp.<sha256 hex>.session` (`acp/kas_secret_storage.py`), which no
+  server row's check reads. The key file is never opened and nothing is decrypted, so only a boolean
   leaves the module. Both stores are consulted whatever the configured backend,
   since the backend can differ per agent and per route. `_runtime_grant_present`
   combines them: kiro-cli `true` decides it without reading the vault (so no
@@ -1501,8 +1504,8 @@ approval identity and its display holds the whole launch. Each command and env
 list is shown in full up to 512 entries and 16384 characters; a list past
 either bound is cut, ends in a `…(partial)` marker, and leaves the server
 unapprovable. An approval covers only a launch the operator can read: a row's
-**Details** and the Review dialog show this display beside the Approve that
-pins it, so a change past a cut would be approved unseen. This scrubbed,
+**Details** and the Review dialog show this display beside the button that
+pins it (**Share across chats**, or **Approve update** for a changed launch), so a change past a cut would be approved unseen. This scrubbed,
 bounded GET follows the other dashboard read routes and does not require owner
 identity; the POST that records the choice remains owner-only. The bulk review
 reads every candidate at once with the
@@ -1557,7 +1560,9 @@ and a `secret://` reference in its env resolves only once the
 gateway runs it. A reserved `kirocrew-*` server, whose managed launch needs no
 approval, and a never-pooled one are not named.
 
-On the page, the hero card holds the page-wide sharing switch and the
+On the page, the hero card (`id="mcp-sharing"`; `?view=sharing#mcp-sharing`
+opens the Sharing view and scrolls to it) holds the page-wide sharing switch,
+named "Turn on MCP server sharing", the first-share diagram, and the
 measured memory figures (`GET /api/mcp-gateway/footprint`, owner only, PSS read
 from `/proc`; both hidden when any process cannot be read). "Using now" shows
 whenever it was read, on its own; "with sharing" shows only when it was read
@@ -1594,13 +1599,34 @@ Review dialog inside that server's block, above the launch it then shows,
 never on the page as well. An answer that brings no launch to show reads as a
 changed launch. A row refused as
 `added_outside_dashboard` reads **Paused · not approved yet** and behaves the
-same with **Approve**. A marked row that cannot share (a refusal with no
+same with **Share across chats**. A marked row that cannot share (a refusal with no
 approvable identity, or an env a shared copy would withhold) has no switch,
 only a **Remove** button that takes the mark off. A row's **Details** shows
-the launch in the gateway's display-safe form (argv, env key names, never a
-value), with the approved launch beside the new one for a changed command, the
-changed arguments and env names said once above them and marked in the new
-one.
+the launch in the gateway's display-safe form (argv, env key names), each
+distinct command line once, with the approved launch beside the new one for a
+changed command. The changed arguments are marked in each column and repeated
+in no line above them; each column lists only the env keys that were added,
+removed or changed, and those keys are said once above the columns. A launch
+whose command is new on its side also lists and marks its own keys
+(`unmatchedKeys`), unless a launch the other side alone runs had the same
+value, so a key it gained is shown even when another launch already set it.
+When a launch of a command both sides run changed as well
+(`wholeLaunchChanges`), per-key sets cannot prove which keys moved between
+those launches (two of them swapping a loader preload), so the columns hide no
+key and the changed launches are drawn whole behind **Show full command**. A key the
+same on both sides, such as a PATH that did not change, is not listed. An env
+key set on both sides with a new value is said there too: for a value the gateway shows in clear (PATH, `LD_*`, a `${VAR}`
+reference) the list entries added and removed, and otherwise only its key
+(`envValueChanges`). When both sides run the same commands, the summary is per
+launch (`mcpLaunchDiff.launchChanges`): each new launch is paired with the
+approved launch it most likely replaced (same command, then fewest changed
+keys) and diffed against that launch only, so two launches swapping values
+show as a change on each; a launch with no partner is named as added or
+removed in one line that carries its command. Launches of one command that
+changed the same way (the gateway's PATH moving on every launch) are drawn
+once (`distinctChanges`). The changed launches, each distinct one once, sit
+behind **Show full command**, and a value outside the gateway's clear set is
+drawn as its key only.
 A `changed_needs_reapproval` refusal that only added a launch, such as a second
 agent declaring the same server with its own arguments, reads **Paused · new
 launch to approve** instead, and its Details line says the approved launch did
@@ -1630,7 +1656,13 @@ re-reads on each socket connect (`hooks/useWebSocket.ts`) and otherwise only
 every five minutes. That poll stops only for a viewer the gateway refuses; it
 keeps running while sharing is off, so a tab notices sharing turned on elsewhere.
 **Review and approve** opens a dialog over the waiting servers only, one
-Approve per server, the same pinned write; there is no approve-all.
+**Share across chats** per server (and **Don't share**, which writes
+nothing), the same pinned write; there is no approve-all. The dialog carries no
+explainer of its own: what sharing risks is said once, in the confirm shown when
+sharing is turned on (`share_risk`), and the buttons are named by their result.
+A block for a changed launch draws no "what changed" hint either, since its diff
+says it; a block refused for another reason (never approved here, not
+approvable) keeps that reason line, as the row's **Details** does.
 A gateway start that pauses a shared server whose launch was approved before
 (`changed_needs_reapproval`) publishes one `system.approval` bell note naming
 the paused servers (`notifications/mcp_share_paused_note.py`, called once the
@@ -2232,7 +2264,9 @@ wait for a restart). It differs in four places. The stub's `--agent` identity is
 file gets no settings injection: the worker's servers are its Bot file's. A
 file is taken only when it is a plain file (no symlink) in a plain folder, is not
 the Bot conductor or worker spec, and is named by this instance's Bot owner
-record. A symlinked or non-folder `~/.kiro/mates/agents`, a symlinked Bot
+record. A file that predates the record and has no entry is recorded as this
+instance's at that check when this instance's roster binds it, and is off the
+record otherwise. A symlinked or non-folder `~/.kiro/mates/agents`, a symlinked Bot
 file and a file off the record are skipped with a log line and treated as
 absent, as the agents loop treats a source its hardened reader refuses: the pass
 stays cacheable and `live_incomplete` is not set for them. The `crewmate:` prefix
@@ -5175,16 +5209,30 @@ the agent's spec mounts on `toolSearch.neverDefer` for a spec that grants
 | `kirocrew-worker`, `kirocrew-mate-worker` | `work_brief`, `work_report`, `mcp_server_wait` | 1,200 |
 | `kirocrew-pipeline-conductor`, `kirocrew-security-conductor` | `work_dispatch`, `session_create`, `session_send`, `session_read_message`, `session_close`, `work_ledger_read`, `work_ledger_record`, `accept_eval`, `monitor_start`, `wait`, `mcp_server_wait` | 7,700 |
 | `kirocrew-conductor`, `kirocrew-ledger-conductor`, `kirocrew-team-lead` | the eleven above and `work_brief` | 7,850 |
-| a custom agent (`CUSTOM_AGENT_JOB_TOOLS`) | `mcp_server_wait` | none: one tool of 63 tokens |
+| a custom agent (`CUSTOM_AGENT_JOB_TOOLS`) | `spawn_run`, `spawn_sub_agents`, `spawn_status`, `mcp_server_wait` | 3,350 (`CUSTOM_AGENT_JOB_TOOL_BUDGET`) |
 
-A custom agent grants no loader, so every MCP tool it can call is on
-`neverDefer`, except the tools of the Kiro Crew servers Crew itself added to it
-(`acp/default_crew_servers.crew_added_servers`: the managed entry, byte for byte).
-Those are left behind KAS's loader, as on the default agent, so Crew's own tool
-specs (about 137 K characters, measured on an agent with no server of its own) no
-longer ride in each of its requests; its
-`CUSTOM_AGENT_JOB_TOOLS` and any added-server tool its author named one by one stay
-direct (`custom_agent_never_defer_ids`).
+The tools of the Kiro Crew servers Crew itself added to a custom agent
+(`acp/default_crew_servers.crew_added_servers`: the managed entry, byte for byte)
+are left behind KAS's loader, as on the default agent, so Crew's own tool specs
+(about 137 K characters, measured on an agent with no server of its own) no longer
+ride in each of its requests. Its `CUSTOM_AGENT_JOB_TOOLS` the spec mounts stay
+direct whether or not the spec grants the loader: a spec that grants none keeps
+every other MCP tool it can call direct too, and any added-server tool its author
+named one by one (`custom_agent_never_defer_ids`); a spec that grants it, which
+`"*"` and `@builtin` do, is sent those job tools alone
+(`job_tool_ids(..., custom=True)`). The sub-agent tools are on that row because a
+custom agent's prompt cannot send it to a tool it does not know it has: behind the
+loader they were missing from the tool list the model reads, and a custom agent
+asked to start a sub-agent reached for something else. A spec that excludes one of
+them still cannot call it (`excludedTools` is applied by KAS before it partitions),
+and a spec whose `tools` does not reach `kirocrew-core` gains none: one that names
+Crew's tools one by one (`@kirocrew-core/memory_recall`) keeps exactly those, while
+one that lists only built-ins (`fs_read`, `execute_bash`) is given `@kirocrew-core`
+whole by Crew and so gains the row. Either way the list decides only what is listed
+up front; what the session may call is unchanged. The process
+sharing preview carries one limit: a loader-granting custom agent whose chat joins
+a process another agent founded runs on that founder's list
+(`acp/chat_runtime_sharing.agent_pins_tool_surface`).
 
 `mcp_server_wait` is in every row because every shipped agent's turn can be told a
 server is still starting (the `[MCP SERVERS]` block), and a load in front of the
@@ -5241,9 +5289,11 @@ at most five seconds, as the start did before
 The rules the table is held to (`test/test_job_tools.py`):
 
 - **A row is the tools the agent's own prompt makes its procedure**, not the tools
-  it might use. Anything else is one `tool_search` away. The one addition is the
+  it might use. Anything else is one `tool_search` away. The additions are the
   default agent's most used small tools above, chosen from measured use, never
-  from guesses.
+  from guesses, and the custom-agent row, whose prompt is unknown: it holds the
+  sub-agent tools, because an agent cannot be told a procedure for a tool it
+  does not see.
 - **A row fits its budget.** Its tools ride in every request of that agent. The
   budgets live in `test/test_job_tools.py` (`JOB_TOOL_BUDGETS`), beside the test
   that enforces them, because nothing at run time reads one. They are counted the
@@ -5257,8 +5307,10 @@ The rules the table is held to (`test/test_job_tools.py`):
 - **The set is fixed per agent**, never per session, so the tool definitions an
   agent's requests open with are the same in every session of it and the cached
   prefix stays valid.
-- **An agent with no row is untouched**: an operator's own agent, an app's agent
-  and a crew member's template put on the wire what they did before. The table is
+- **An agent with no row is untouched**, except a custom agent Crew added its own
+  servers to, which takes the custom-agent row above: an app's agent, a crew
+  member's template and a shipped agent with no row put on the wire what they did
+  before. The table is
   keyed by agent name, so this is about the name: a spec an operator saved under a
   shipped name (their own `kirocrew-worker.json`, say) takes that name's row, for
   the row's tools the spec itself mounts and for nothing else it mounts.
@@ -5678,8 +5730,8 @@ capability; it is a human debug and repro harness that runs the eleven existing
 them in one process, so `element_index` values stay resolvable across calls). The
 MCP-first rule exists so the model gets a structured tool instead of shelling
 out, and the model already has all eleven. A tool that runs other tools would let a
-model launder one per-call gate decision into many, so do NOT add
-`computer_call`.
+model launder one per-call gate decision into many, so do NOT add an MCP tool
+for `kirocrew computer call`.
 
 ## MCP tools MUST be stateless
 
@@ -6215,7 +6267,9 @@ no walk to get wrong. The model still reads the marker, so a reply that repeats 
 result carries the marker line too; the dashboard's segment flush drops each line
 that is only such a marker from the saved reply
 (`session_directive.strip_quoted_markers`) and keeps the reply's other lines, and
-the channel `TurnDriver` drops the same lines from the streamed reply.
+the channel `TurnDriver` drops the same lines from the streamed reply, as do the native
+Slack thread turn, the plain monitor-loop wake, a team-channel agent's post and
+`kirocrew chat`.
 
 A second, provider-neutral channel covers a backend that emits no
 `_meta.kiro` identity. After encoding, the tool reports the CALL (tool name and

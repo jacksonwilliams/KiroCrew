@@ -1,6 +1,7 @@
 /**
- * TeamCrewsGroup: the remote Crews reachable through the Kiro relay, as the
- * "Remote Crews" group at the end of the Crew switcher's menu. Each
+ * TeamCrewsGroup: the remote Crews reachable through the Kiro relay, at the end
+ * of the Crew switcher's one "Remote Crews" list: under the crews this dashboard
+ * reaches itself (SSH, SSM), or under a heading of its own when there are none. Each
  * row reads "<type> · <status>", the type Shared (group icon) or Private (lock
  * icon), and its end says which of three states it is in: Not connected, Connected
  * (open in this window, not in front) or a check (in front). Which account the list was read for is said on Settings >
@@ -29,7 +30,7 @@ import { Check, ExternalLink, Lock, Users } from 'lucide-react'
 import type { RelayCrewEntry } from '../api/client'
 import {
   clearRelayCrewsUnseen, isRelayCrewOnline, isSignedOutRefusal, openRelayCrewTab, recordRelayCrewsSeen, relayCrewStatusText,
-  relayRefusalText, useRelayViewerCrews,
+  relayRefusalText, useRelayViewerCrews, RELAY_DOMAIN_SETTING,
 } from '../hooks/useRelayViewerCrews'
 import { useAppDispatch, useAppSelector } from '../store'
 import { relayOpenRequests, relayPaneBridge, useRelayTabs } from '../lib/relayCrewPanes'
@@ -188,10 +189,15 @@ function TeamCrewItem({ crew, refusal, onOpen, onShow, current = false, ownWindo
   )
 }
 
-export function TeamCrewsGroup({ crews, failed = false, refreshOnOpen, close }: {
+export function TeamCrewsGroup({ crews, failed = false, offDomain = false, refreshOnOpen, close, headed = false }: {
   crews: RelayCrewEntry[]
+  /** The menu already drew the "Remote Crews" heading over its own crews, so these
+   *  rows continue that one list instead of opening a second group. */
+  headed?: boolean
   /** The latest read failed; the rows are the last list loaded. */
   failed?: boolean
+  /** The dev relay domain setting left listed Crews out (`useRelayViewerCrews`). */
+  offDomain?: boolean
   /** Reads the list again; the group mounts each time the menu opens. */
   refreshOnOpen: () => void
   /** Closes the switcher's menu. */
@@ -203,6 +209,7 @@ export function TeamCrewsGroup({ crews, failed = false, refreshOnOpen, close }: 
   const queryClient = useQueryClient()
   // With rows kept, say they are the last list rather than that nothing loaded.
   const failedText = t(crews.length > 0 ? 'components.relayCrews.refresh_failed' : 'components.relayCrews.refusal_list_generic')
+  const offDomainText = t('components.relayCrews.off_domain', { setting: RELAY_DOMAIN_SETTING })
   const dispatch = useAppDispatch()
   const [refusals, setRefusals] = useState<Record<string, { text: string; code?: string }>>({})
   // The group renders only while the menu is open, so showing it is seeing its
@@ -251,10 +258,14 @@ export function TeamCrewsGroup({ crews, failed = false, refreshOnOpen, close }: 
   }, [close, crews, dispatch])
   return (
     <div role="group" aria-label={t('components.relayCrews.list_label')} data-testid="team-crews-group">
-      <DropdownMenuSeparator />
-      <DropdownMenuLabel>
-        {t('components.relayCrews.group_team_crews')}
-      </DropdownMenuLabel>
+      {!headed && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>
+            {t('components.relayCrews.group_team_crews')}
+          </DropdownMenuLabel>
+        </>
+      )}
       {failed && (
         <>
           <div className="px-3 pb-1">
@@ -271,7 +282,15 @@ export function TeamCrewsGroup({ crews, failed = false, refreshOnOpen, close }: 
           <ErrorNoticeMenuItem Item={DropdownMenuItem} message={t('components.relayCrews.seen_not_saved')} describedBy="relay-crews-seen-failed" />
         </>
       )}
-      {crews.length === 0 && !failed && <div className="px-3 py-1.5 text-[12px] text-muted">{t('components.relayCrews.empty')}</div>}
+      {offDomain && (
+        <>
+          <div className="px-3 pb-1">
+            <ErrorNotice id="relay-crews-off-domain" variant="inline" impact="partial" message={offDomainText} testId="relay-crews-off-domain" />
+          </div>
+          <ErrorNoticeMenuItem Item={DropdownMenuItem} message={offDomainText} describedBy="relay-crews-off-domain" />
+        </>
+      )}
+      {crews.length === 0 && !failed && !offDomain && <div className="px-3 py-1.5 text-[12px] text-muted">{t('components.relayCrews.empty')}</div>}
       {crews.length > 0 && crews.map(c => (
             <TeamCrewItem
               key={c.endpointId} crew={c} refusal={refusals[c.endpointId]} onOpen={onOpen}
@@ -286,16 +305,37 @@ export function TeamCrewsGroup({ crews, failed = false, refreshOnOpen, close }: 
 /** The Remote Crews group in an SSH Crew's own switcher, from the rows the window
  *  relays (lib/paneRelayCrews.ts). A pick goes up to that window, which shows or
  *  opens the Crew from its own top bar, which also says why when it is refused. */
-export function EmbeddedTeamCrewsGroup({ crews, close }: { crews: PaneRelayCrew[]; close: () => void }) {
+export function EmbeddedTeamCrewsGroup({ crews, failed = false, close, headed = false }: {
+  crews: PaneRelayCrew[]
+  /** The window's latest read failed; `crews` are the last rows it loaded. */
+  failed?: boolean
+  close: () => void
+  /** As `TeamCrewsGroup`'s: the pane's own crews already opened the one list. */
+  headed?: boolean
+}) {
   const { t } = useTranslation()
+  const failedText = t(crews.length > 0 ? 'components.relayCrews.refresh_failed' : 'components.relayCrews.refusal_list_generic')
   const pick = (endpointId: string) => {
     postToHost({ type: 'mc-switch-instance', v: 1, id: `${PANE_RELAY_PREFIX}${endpointId}` })
     close()
   }
   return (
     <div role="group" aria-label={t('components.relayCrews.list_label')} data-testid="team-crews-group">
-      <DropdownMenuSeparator />
-      <DropdownMenuLabel>{t('components.relayCrews.group_team_crews')}</DropdownMenuLabel>
+      {!headed && (
+        <>
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel>{t('components.relayCrews.group_team_crews')}</DropdownMenuLabel>
+        </>
+      )}
+      {failed && (
+        // As the top bar's group says it, which is hidden while this pane is in front.
+        <>
+          <div className="px-3 pb-1">
+            <ErrorNotice id="relay-crews-refresh-failed" variant="inline" message={failedText} testId="relay-crews-refresh-failed" />
+          </div>
+          <ErrorNoticeMenuItem Item={DropdownMenuItem} message={failedText} describedBy="relay-crews-refresh-failed" />
+        </>
+      )}
       {crews.map(c => (
         <TeamCrewItem
           key={c.endpointId} crew={{ ...c, crewUrl: '' }} refusal={undefined} onOpen={pick}
@@ -309,11 +349,11 @@ export function EmbeddedTeamCrewsGroup({ crews, close }: { crews: PaneRelayCrew[
 /** The top bar's Crew switcher with the Team Crews group, while a list is loaded and
  *  the group has a Crew to show or a signed-in account to say none is shared with. */
 export default function TeamCrewsSwitcher({ variant }: { variant: 'strip' | 'inline' }) {
-  const { hidden, crews, account, failed, refreshOnOpen } = useRelayViewerCrews()
+  const { hidden, crews, account, failed, offDomain, refreshOnOpen } = useRelayViewerCrews()
   const [openRefusal, dismissOpenRefusal] = useOpenFromNote(crews)
   // The hook sends an account only with a loaded list.
   const accountLabel = account ? accountProviderLabel(account.accountType, account.startUrl) : ''
-  const showGroup = !(hidden || (crews.length === 0 && !accountLabel && !failed))
+  const showGroup = !(hidden || (crews.length === 0 && !accountLabel && !failed && !offDomain))
   // The rows the group draws; while hidden it draws none, so an open Crew keeps the bar's row.
   const listedKey = showGroup ? crews.map(c => c.endpointId).join('\n') : ''
   const listedRelayCrews = useMemo(() => new Set(listedKey ? listedKey.split('\n') : []), [listedKey])
@@ -325,8 +365,8 @@ export default function TeamCrewsSwitcher({ variant }: { variant: 'strip' | 'inl
       // Nothing while hidden or loading, or for an empty list with no account
       // label, so the bar stays as it is without the relay. A loaded empty list with an
       // account label still mounts the group, so it says there is nothing to open.
-      extraGroups={!showGroup ? undefined : close => (
-        <TeamCrewsGroup crews={crews} failed={failed} refreshOnOpen={refreshOnOpen} close={close} />
+      extraGroups={!showGroup ? undefined : (close, headed) => (
+        <TeamCrewsGroup crews={crews} failed={failed} offDomain={offDomain} refreshOnOpen={refreshOnOpen} close={close} headed={headed} />
       )}
       extraNotice={openRefusal ? (
         <ErrorNotice

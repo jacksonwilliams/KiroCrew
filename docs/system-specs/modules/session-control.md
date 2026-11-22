@@ -419,11 +419,45 @@ after it lands. The result names the outcome: `steered` for an injection,
 
 A harness that can drop a steer it accepted (`steer_needs_loss_recovery`:
 codex, claude, goose, pi and opencode) takes a peer's steer only when
-`agent.peer_steer_loss_recovery` is on; otherwise the steer arm answers
-unavailable and the message queues. With the key on, the peer's steer is held
+`agent.peer_steer_loss_recovery` is on; otherwise the send-time steer arm answers
+unavailable and the gateway holds the message as a pending steer
+(`dashboard/deferred_steer.py`). The stream loop retries it at each tool boundary
+of the same turn; the held attempt skips the key's refusal, marks the steer
+delivered before the injection (`slot._deferred_steer_delivered`), and the turn's
+teardown requeue skips a marked steer. A marked steer the Claude Code client only
+buffered behind an open tool call, then dropped unwritten or had refused
+(`held_steers_unsent`), loses its mark when the turn releases its client: the
+teardown queues it and its receipt reads `queued@<time>`, and a hard stop tells its
+sender it will not run. On the Claude Code and Codex paths it is
+therefore injected at most once and never queued back; on the Goose, request and
+concurrent-prompt (Pi, OpenCode) paths a steer the adapter took just as its turn
+ended is reported False and can run once more from the queue. A turn that ends
+first hands the unmarked held steers to the queue, and the next turn starts in the
+same hand-off. They join the HEAD of the queue, ahead of messages queued meanwhile and
+in send order, as an unconsumed steer does; a held steer that a boundary of a later
+turn finds is queued at the head too. A held steer that a later re-check
+refuses, at a boundary (the gate refuses the sender, or the key resolves to another
+session) or when its turn ends and the queue fallback refuses it, reads
+`refused@<time>`, and its sender gets one `SEND_DISCARD_REFUSED_STEER` notice that
+it was not delivered and will not run; a steer a hard stop discarded first keeps the
+stop's one notice. With the key on, the peer's steer is held
 as the composer's is: it counts as delivered only when its turn ends cleanly,
 and the turn's teardown otherwise requeues it as a queue card that runs as the
 next turn, so it can run twice.
+
+While the key is off, a held peer steer injected into one of those harnesses can
+still be dropped by the harness: its sender is told it may not have run and its
+receipt reads `unconfirmed@<time>`, and the delivered mark
+that stops a second run also stops a retry. A save writes each held steer that
+is not marked delivered into the saved queue (`deferred_steer.saved_queue_entries`)
+as the plain queued peer send the teardown would make of it, at the head in send
+order, so a gateway restart hands it back as that queue card; a marked steer is
+left out, so a restart never runs it twice. The live slot keeps its held list, and
+a hold starts the queue write as a queued send does. Admission
+closes at the start of each turn hand-off, so a steer sent while a turn ends is
+queued for the next turn instead of held. A running target whose client cannot
+steer (`supports_steer` false) queues the steer as a plain send; a target whose
+turn has published no client yet holds it.
 
 Two properties keep the steer arm from being a hole in the queued arm's checks.
 The delivery happens NOW rather than later, which removes the queue's waiting
@@ -1330,9 +1364,23 @@ session, and the owner's Conductor while `agent.session_control` is off, see
   `not_creator` with the switch off or on. With the switch on, the giver can take the
   session back by handing it to itself while it still manages the new manager; with
   it off, no fenced caller can.
-- A work-ledger `bind` after a handoff is a separate gap: `_refuse_unowned_worker`
-  compares `_created_by`, so the new manager is refused `worker_not_owned` while the
-  giver can still bind. Tracked in #19103.
+- `bind: true` also moves the right to bind the session to ledger items: the record
+  carries `"bind": true` and `_refuse_unowned_worker` admits only
+  `session_managers.bind_holder`. Only its current holder may pass it (403
+  `not_bind_holder`); a session that conducts moves only under a ledger at least one
+  level above its own (409 `depth_exceeded`, also at the bind). The caller's own open
+  item for it closes `abandoned` on the caller's board unless it waits on a person
+  (an open `ask`, or the Board's `names_person`: a `blocked`/`question` report naming
+  a person-wait reason that no `decide` or steer has answered since), judged again
+  under the board lock in `release_on_handoff`'s `before_write`, so a report that
+  lands during the handoff keeps it open. A bind holds `HANDOFF_LOCK` through its
+  write, and so does a `goal` or `create` that opens the caller's first ledger,
+  whose depth comes from the binding such a bind rewrites; each takes it before
+  any board lock. The depth check reads ledgers by slot key, which names the same
+  ledger as the slot's `effective_session_key` for every slot a handoff admits: a
+  channel-linked target or recipient is refused `linked_session_target` first. A
+  plain handoff, a chain take-back or a hand-back on close writes no flag, so the
+  right returns to the creator.
 - A fenced caller adopting a Bot's DM slot is refused `not_creator`, since no
   fenced caller created it; an unfenced agent in a person's own tab can adopt it.
 
@@ -2388,8 +2436,8 @@ delivery and retains the binding by design (see [session](session.md)), and with
 the predicate in place an owner needs neither it nor an unlink to conduct — from
 the DM or from the tab mirrored to it.
 
-Related fold: the ledger's bind ownership check compares `_created_by` (the
-creator's **slot** key, as `session_create` stamps it) against the conductor
+Related fold: the ledger's bind ownership check compares the bind holder (`_created_by`, the
+creator's **slot** key as `session_create` stamps it, unless a handoff moved it) against the conductor
 **session** key's resolved slot (`caller_slot_key`), because a channel-born
 conductor is keyed `discord:…:genN` while its slot is that key folded to the
 filename charset — a string comparison refused every worker such a conductor

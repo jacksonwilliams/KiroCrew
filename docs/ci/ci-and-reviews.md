@@ -238,7 +238,23 @@ Three structural facts explain most of the rest:
   run unfiled, so the log is read only for a job whose annotations cannot be
   read or, on a backend test job, name no test. A failed read says why in a
   notice and in the job summary; a read the API rate limit refused is named as
-  that, with the reset time, and ends the reading. The annotations name at most 10
+  that, with the reset time, and ends the reading. Every `gh` call of the step
+  goes through `.github/actions/gh-rate-limit` (below) with a 20-minute budget,
+  so a refused label call, issue lookup or job read waits for the reset and is
+  retried; a reset past the budget fails the call, and the run ends red having
+  written nothing or files what it had read. Nothing marks such a run. Every
+  red run that names a test reads the run list and replays the red verdict runs
+  directly before it that no issue's record holds (the open issue's, or with
+  none open the newest among the closed watcher issues, read from the labelled
+  list and from the 200 newest closed issues of any label, since an issue
+  closed while main was red leaves no green run), back to the first green run,
+  the last run a record holds, or 5 runs
+  (`.github/scripts/main_red_previous.py`, one job list and one annotation read
+  per failed job for each), under the same rules as a live run, so the issue
+  names the first red commit and the whole streak even when a watcher run was
+  lost to the rate limit or dropped from the queue. The replay opens no issue:
+  with none open, the run opens one only by the two rules below. A replay that
+  cannot read a run or the closed issues counts none. The annotations name at most 10
   failing tests per job. With no issue open it files one only when a test is red
   in two failed jobs of the run (the Linux and the Windows shard that both carry
   it), so a test that fails once on one leg, which is as often a flake as a
@@ -552,7 +568,8 @@ fleet, so one `gh` call made while it is spent fails the run, although the limit
 resets within the hour. The same holds for an event-triggered check that fails
 closed and is recomputed only by the PR's next event: Fork PR Description and
 Sensitive Change Review install the wrapper too, from their default-branch
-checkout. `.github/actions/gh-rate-limit` puts a `gh` wrapper on
+checkout. So does the main-red watcher, whose lost run leaves a red main
+unrecorded until the next run of main ends. `.github/actions/gh-rate-limit` puts a `gh` wrapper on
 PATH for the rest of the job: it retries only a call whose error names a rate
 limit, at most twice, waiting for the earliest reported reset (60 s for a
 secondary limit) inside one job-wide budget (`max-wait`, 20 minutes by default).
@@ -651,21 +668,36 @@ shared 15,000 requests an hour the section above is about, returns at most
 1,000 runs a search, and carries no count of a run's red jobs.
 
 **The budget.** The census reads by GraphQL with the job's `GITHUB_TOKEN`. That
-token has a GraphQL primary limit of its own, apart from the REST one: 15,000
-points an hour per repository for a repository of a GitHub Enterprise Cloud
-account, 1,000 otherwise
-([GitHub's GraphQL rate limits](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#primary-rate-limit)).
-Every workflow of the repository shares it.
+token has a GraphQL primary limit of its own, apart from the REST one, and
+every workflow of the repository shares it. Its size is read, not assumed:
+this repository's Actions token has 10,000 points an hour, where
+[GitHub's page](https://docs.github.com/en/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#primary-rate-limit)
+gives 1,000 or 15,000 for `GITHUB_TOKEN`.
 
-| Flag | Value | What it bounds |
-|---|---|---|
-| `--max-points` | 4,800 | The most one run spends: a third of the bucket, less 200 points for the calls already sent when the census stops (one for each worker, about 30 points at most). A weekday is about 3,000, and a day up to about three days back still fits |
-| `--reserve-points` | 7,700 | It stops before a call that would start with less: half the bucket, and the same 200 points for the calls already sent |
-| `--gh-timeout-seconds` | 900 | One `gh` call: the 600 seconds the `gh` wrapper may sleep inside it on a spent limit, and 300 for the call itself. The wrapper charges a sleep before it starts, so a call ended mid-sleep would have spent the wait budget and read nothing |
+The step before the census runs `scripts/ci_red_census_budget.py`. It reads the
+bucket from `/rate_limit`, which costs nothing, and sizes the census's two
+limits to it:
 
-A step before the census reads the bucket's size from `/rate_limit`, which
-costs nothing, and fails the job when it is under 10,500 points (the reserve
-and a weekday). The census never waits for a bucket: a job that sleeps holds a
+| Limit | Rule | On 10,000 points | What it bounds |
+|---|---|---|---|
+| reserve (`--reserve-points`) | half the bucket, plus 120 | 5,120 | The census stops, and says Partial, before a call that would start with less: other workflows keep half of every hour's bucket |
+| most (`--max-points`) | two fifths of the bucket, less 120 | 3,880 | The most one run spends. A weekday is about 3,000 |
+
+The 120 points are one call for each of the 4 workers at about 30 points, the
+dearest query: the census checks its budget before a call and learns the cost
+after it, so the calls already sent when it stops land past the line.
+
+The step refuses, the census is not started and the job fails when the read
+would not fit: two fifths of the bucket hold less than a weekday (any bucket
+under 7,800 points an hour), what is left above the reserve holds less than a
+weekday (other jobs spent this hour's bucket), or the bucket cannot be read.
+The census step takes both numbers from that step and starts nothing without
+them. `--gh-timeout-seconds 900` gives one `gh` call the 600 seconds the `gh`
+wrapper may sleep inside it on a spent limit and 300 for the call itself: the
+wrapper charges a sleep before it starts, so a call ended mid-sleep would have
+spent the wait budget and read nothing.
+
+The census never waits for a bucket: a job that sleeps holds a
 runner. A `schedule` event carries no inputs and no `repository` object, so
 an empty `day` means yesterday and the default branch falls back to
 `github.ref_name`; a test evaluates every step's `env:` under both events.
@@ -685,7 +717,7 @@ the days it has. Any other exit fails the job, and
 
 **Filling a day in.** GitHub may delay or drop a scheduled run, and nothing
 re-reads a missed night by itself. Run the workflow by hand with `day` set to
-the missing day (up to about three days back fits one run's budget), then once
+the missing day (yesterday and the day before fit one run's budget), then once
 more with `week` ticked and `day` set to the last day of that week.
 
 **What adding days up does and does not do.** A run belongs to the day it was
@@ -871,6 +903,15 @@ now defines is a `dead-identifier` finding against the list file, and unlike a d
 dead identifier it fails the run without `--strict-identifiers`, until the line is
 deleted.
 
+A name one doc owns is declared in that doc, on its own line outside a fence:
+`<!-- docs-lint: defines a, b -->` for keys the doc defines itself (an output
+schema it specifies, fields an agent writes into free-form notes), and
+`<!-- docs-lint: wrong-on-purpose a -->` for a name it cites so a reader avoids it
+(a retired task type, a deliberate typo). The comment does not render on GitHub,
+covers only that doc, and only `dead-identifier` reads it. It is held to the same
+rule as the external list: a declared name the code defines, or one the doc no
+longer cites in a code span, fails the run until the name leaves the comment.
+
 The builtin app tree is the mirror image of that exemption: it keeps every fact
 check and every link check, and drops only the two CURATION rules, reachability and
 the per-directory index. A `SKILL.md` is a skill definition an agent loads verbatim,
@@ -1033,7 +1074,7 @@ yet decided: install from a committed constraints file, or set
 | `lockfile-engines-floor` | "Lockfile Installs On Declared Node Floor". Runs a real `npm ci` in `website/` on the LOWEST Node version `engines.node` declares, so a lockfile that only resolves under the newer npm major cannot land. The version is a literal pinned to that floor by `test_the_engines_floor_job_pins_the_declared_floor` rather than a range, because resolving a range picks the newest match and makes the job vacuous |
 | `bundle-size` | "Bundle Size Gate". Builds the frontend with `--mode analyze` (which is the only build that emits `dist/bundle-report.json`) and then runs TWO checks over that one build: per-chunk ceilings from `website/scripts/check-bundle-size.mjs`, with a 500 KB default for any chunk not named there, plus a ceiling on the first-load total (`FIRST_LOAD_BUDGET_BYTES`: raw bytes of the `main` entry and every chunk it statically imports), and an acyclic-graph check from `website/scripts/check-chunk-cycles.mjs`. The job name is narrower than its scope on purpose — it is a required check, so renaming it would silently stop satisfying branch protection. **An acyclic chunk graph is a deliberate invariant and the cycle check has no allowlist**, unlike the size ceilings: a chunk cycle has no valid initialization order, so a body can run against a binding that is still uninitialized and blank the page before React mounts, and whether a given cycle does that is not decidable from the chunk graph. Fix the chunking rather than waiving it. Skipped on a backend-only diff, which cannot change the bundle |
 | `i18n-render` | "i18n Render Gate (en-XA, head vs base)". Runs `npm run i18n:render` in `website/`: builds the SPA in DEV mode for HEAD and for the base commit, renders every surface under the `en-XA` pseudolocale in Chromium and fails on any per-surface increase. No gateway, no token, no backend. Default-size Linux runner, skipped on a backend-only diff. Its own job because the ~13 minutes of CPU it takes on a hosted 4-vCPU runner starved the `e2e` Playwright suite past its ceiling on fork PRs. Details: [i18n-gates.md](i18n-gates.md) |
-| `e2e` | Runs `python scripts/ci_e2e_parallel.py`, which awaits `python setup.py test_e2e` and the dedicated Memory UI pytest command in parallel. **CodeBuild-hosted large runner where eligible**, behind the same `run-as-runner` boundary as the backend shards. The suite's disposable gateway takes `agent.sandbox_allow_unsandboxed_exec` (seeded in `test/test_playwright_e2e.py`) because the fleet container refuses `CLONE_NEWUSER` at the runtime policy level and the agent binary is a stdlib echo stub; a sandboxed spawn doing real work stays proven by `e2e-private-namespace` and `e2e-boot-matrix`. Details: [e2e-gate.md](e2e-gate.md) |
+| `e2e` | A matrix of shards, "E2E (stub ACP backend, offline, i/K)", each with its own gateway and one Playwright worker. Every leg runs `python scripts/ci_e2e_parallel.py`: leg 1 awaits `python setup.py test_e2e` and the dedicated Memory UI pytest command in parallel and also runs the asserting harness steps, the other legs run `test_e2e` alone. `test_e2e` takes the leg's part of the suite from `KIROCREW_E2E_SHARD` and fails unless the K shards divide the suite exactly and the leg ran exactly its own list. **CodeBuild-hosted large runner where eligible**, behind the same `run-as-runner` boundary as the backend shards. The suite's disposable gateway takes `agent.sandbox_allow_unsandboxed_exec` (seeded in `test/test_playwright_e2e.py`) because the fleet container refuses `CLONE_NEWUSER` at the runtime policy level and the agent binary is a stdlib echo stub; a sandboxed spawn doing real work stays proven by `e2e-private-namespace` and `e2e-boot-matrix`. Details: [e2e-gate.md](e2e-gate.md) |
 | `e2e-private-namespace` | "E2E (private member namespace, hosted)". The one E2E step the fleet cannot host: `test/e2e/test_private_workflow_memory.py` runs a Crew Member's private workflow MCP inside the member sandbox, which needs `unshare --map-root-user`. Hosted off the fleet (the `kirocrew-runners` group here, `ubuntu-latest` in a fork), clears the AppArmor userns restriction first, no SPA or browser |
 | `integration` | "Integration (in-process gateway)". The middle layer: `test/integration/` boots the real `GatewayOrchestrator.run()` inside the pytest process on a scratch `KIROCREW_HOME` with the packaged fake ACP backend and talks HTTP to the port it bound, so one test can assert across a restart, across two concurrent requests on one event loop, or on a file the boot itself wrote. Opt-in by `KIROCREW_INTEGRATION=1`, so the unit shards collect and skip it; Linux only. Gated on ROUTE coverage -- `scripts/check_integration_route_coverage.py` reports the share of registered dashboard routes the suite requested (`--min` is a ratchet kept a little under what `main` measures) and the report is uploaded as the `integration-route-coverage` artifact. Details: `docs/system-specs/common/testing-conventions.md`, "The integration layer" |
 | `wheel-engine-real-venv` | "Wheel Engine (real venv build)". Runs the one `real_venv`-marked test (`test/test_wheel_engine_lifecycle.py::TestBuildChildEnvironment::test_build_and_verify_a_real_shadow_venv`) on `ubuntu-latest`; the shards deselect that marker |
@@ -1147,7 +1188,8 @@ The Linux, Windows and macOS matrices assign whole files before pytest imports
 their items. `scripts/ci_file_shards.py` is an opt-in pytest plugin, loaded only by
 those matrix commands. It uses SHA-256 of the root-relative POSIX path to choose
 one of `SHARD_COUNT` owners. Each xdist worker reaches the same assignment.
-Adding a file does not move existing files between shards.
+Adding a file does not move existing files between shards, except within a
+`--file-shard-targets` list (below).
 
 Pytest still walks its configured roots, applies its filename patterns and
 platform-specific conftest ignores, and creates its normal file collectors.
@@ -1161,6 +1203,12 @@ list and the leaf-test corpus gates reach pytest as a file named by
 roots as usual and skips every path that is not a listed file or a directory
 above one. Passed as arguments, pytest walks each file's directory once per
 argument, and the ~1,200 reduced-scope files took up to an hour to collect.
+The listed files are spread across the shards by measured time, not by hash or
+pins ([testing-conventions § Shard balance](../system-specs/common/testing-conventions.md#shard-balance)).
+That placement needs every shard of a run to hold the same list, so the `changes`
+job names each list's SHA-256 once per run and every shard passes it as
+`--file-shard-targets-sha256`: a shard whose list differs fails before
+collecting, and does not fall back to the full suite.
 Leaf-test corpus-gate passes load the file-sharding plugin (the same one as the
 full and reduced paths) so the ~814 gates are split across the matrix shards.
 Changed-file repetitions remain unsharded: each matrix job repeats every changed
@@ -3089,6 +3137,37 @@ The guard is a stopgap: Playwright prints `your OS is not officially supported`
 and runs the 24.04 build. The real fix is to bump Playwright from 1.58.2 to a
 release with a native ubuntu26.04 host entry (1.65.1 has one), then remove the
 guard and its test together.
+
+### A job that installs the project's wheel pins its Python
+
+Every workflow job that `pip install`s this project (the built wheel, or `.`)
+selects its interpreter first with the SHA-pinned `actions/setup-python` and an
+explicit `python-version`, then runs pip, `venv` and the scripts from that
+interpreter. It never uses the runner image's own `python3`. That interpreter moves
+with the image, and the wheel's pins are resolved against it. When
+`kirocrew-linux-4-core` moved to ubuntu 26.04, its `python3` became 3.14. The
+only cp314 x86_64 wheel of `pysqlite3-binary` is `0.5.4.post2`, which
+`setup.cfg` excludes (#32424). So the platform-wheel gate that #39770 added to
+`publish-cli.yml` without `setup-python` failed on the scheduled nightly with
+`No matching distribution found for pysqlite3-binary!=0.5.4.post2,>=0.5.4`
+(#40371, fixed by #40354). Use the version the lane that built the wheel uses
+(`build-wheel.yml`, `build-platform-wheels.yml`: `3.12`). A stdlib-only step that
+installs nothing may still use the image's `python3`.
+
+### A change to a nightly-only or release-only workflow says how it was verified
+
+PR CI never runs the jobs that only the nightly schedule, a release push or a
+manual dispatch reach: `nightly.yml`, `publish-cli.yml`, `release.yml`,
+`release-lts.yml` and the reusable workflows only they call. A green PR therefore
+proves nothing about a job added or changed there, and the first run is the
+scheduled nightly, after merge. A PR that adds or changes such a job says in its
+description how the changed job was exercised: a test that extracts and runs the
+`run:` block, the exact local reproduction of the step against the same
+interpreter and inputs, or, for a workflow that publishes nothing, a
+`workflow_dispatch` run of the branch (link it). Never dispatch a publishing
+workflow from a branch to prove a change. If none
+of these was possible, the description says so. A change that only edits
+comments or a guard already covered by a test needs no extra proof.
 
 ## `build.yml`: the artifacts still build
 
