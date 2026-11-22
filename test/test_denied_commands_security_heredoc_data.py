@@ -445,6 +445,15 @@ def test_closing_line_matches_tag_case(cmd, rule):
         (f"bash -c \"cat <<EOF\n'\n\\x65of\n'\nEOF\n{_RESTART}\n# '\"", "self-protection-restart"),
     ]
     + [
+        # A payload with its quotes removed must not take its case from a lower-case
+        # copy of it elsewhere in the command (here inside the ``echo``).
+        (
+            f'echo \'cat <<EOF\n"\nEOF\n"\nEOF\n{_RESTART}\n# "\' ; '
+            f'bash -c "cat <<EOF\n\\"\neof\n\\"\nEOF\n{_RESTART}\n# \\""',
+            "self-protection-restart",
+        ),
+    ]
+    + [
         # bash keeps ``$(x)`` and ``$$`` in the tag word as written.
         (f"cat <<{tag}\n'\n{decoy}\n'\n{close}\n{command}\n# '", rule)
         for tag, decoy, close in (("$(x)", "$", "$(x)"), ("$$'\\x41'", "$A", "$$\\x41"))

@@ -1131,9 +1131,10 @@ Two mechanisms make "the split changed nothing for a caller" a tested claim rath
   lower-cased copy, so `is_denied` keeps the command as submitted for its call
   (`keep_submitted_case`, in the call memo) and the reader reads the tag and the
   closing lines on that text at the same offsets (`cased_view`; a character such as
-  `İ` that lower-cases to two is kept in its lower-cased form). When the case is
-  unknown, as for a payload with its escapes removed or a text the command holds in
-  two cases (a lower-case copy before the real one), a tag with letters opens a body
+  `İ` that lower-cases to two is kept in its lower-cased form). The case is known
+  only for the whole command as submitted or folded. For any other text, such as a
+  slice or a payload with its quotes or escapes removed (which could match a
+  lower-case copy elsewhere in the command), the case is unknown, and a tag with letters opens a body
   only when one line alone can close it: bash then either closes it there or nowhere.
   With a second candidate line, and for a tag word that holds `$(`, `${`, `$[`, `$$`
   or a backtick (bash keeps those in the word as written), no body opens, and the
