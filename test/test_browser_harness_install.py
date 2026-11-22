@@ -298,6 +298,63 @@ def _pruned_install(prefix: Path, *, minor: int) -> Path:
     return sentinel
 
 
+def _windows_venv(prefix: Path, home: Path) -> None:
+    """A finished Windows install: a copied ``Scripts/python.exe`` and ``pyvenv.cfg`` naming ``home``."""
+    venv = install.venv_dir(prefix)
+    (venv / "Lib" / "site-packages" / "pip").mkdir(parents=True)
+    (venv / "Scripts").mkdir()
+    (venv / "Scripts" / "python.exe").write_bytes(b"launcher")
+    minor = ".".join(str(n) for n in sys.version_info[:2])
+    (venv / "pyvenv.cfg").write_text(f"home = {home}\nversion = {minor}.4\n", encoding="utf-8")
+    (prefix / install.MARKER_FILE).write_text(
+        json.dumps({"version": HARNESS_VERSION, "lock_sha256": install.lock_digest()}),
+        encoding="utf-8",
+    )
+
+
+def test_a_windows_venv_whose_base_python_was_removed_is_repaired_in_place(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The Windows launcher is a copied file, so it outlives its base Python.
+    The venv reads as not installed and is re-pointed offline, not left to fail at pip."""
+    monkeypatch.setattr(install, "IS_WINDOWS", True)
+    _gateway_ships(monkeypatch, "pip")
+    prefix = tmp_path / install.PREFIX_LEAF
+    _windows_venv(prefix, tmp_path / "pruned")
+    assert install.install_state(tmp_path).installed is False
+    assert install.install_state(tmp_path).python is None
+    assert install.harness_current(tmp_path) is False
+    calls: list[list[str]] = []
+
+    def runner(argv: list[str], timeout: float) -> subprocess.CompletedProcess[str]:
+        calls.append(argv)
+        return _ok(argv, timeout)
+
+    install.install_sync(tmp_path, runner=runner, components=(install.COMPONENT_HARNESS,))
+    assert calls[0] == [
+        sys.executable,
+        "-I",
+        "-m",
+        "venv",
+        "--upgrade",
+        "--without-pip",
+        str(install.venv_dir(prefix)),
+    ]
+    assert "pip" in calls[1] and calls[1][-1] == str(install.LOCK_FILE)
+
+
+def test_a_windows_venv_whose_base_python_exists_stays_installed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(install, "IS_WINDOWS", True)
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "python.exe").write_bytes(b"python")
+    _windows_venv(tmp_path / install.PREFIX_LEAF, base)
+    assert install.install_state(tmp_path).installed is True
+    assert install.harness_current(tmp_path) is True
+
+
 @requires_symlinks
 @pytest.mark.parametrize("gateway_has", ["pip", "ensurepip"])
 def test_a_venv_whose_base_python_was_removed_is_repaired_in_place(
@@ -319,6 +376,12 @@ def test_a_venv_whose_base_python_was_removed_is_repaired_in_place(
         if argv[1:4] == ["-I", "-m", "venv"]:
             bindir = install.venv_python(prefix).parent
             links_at_venv.extend(p.name for p in bindir.iterdir() if p.is_symlink())
+            # ``venv --upgrade`` re-points ``pyvenv.cfg`` at this interpreter.
+            cfg = install.venv_dir(prefix) / "pyvenv.cfg"
+            minor = ".".join(str(n) for n in sys.version_info[:2])
+            cfg.write_text(
+                f"home = {Path(sys.executable).parent}\nversion = {minor}.4\n", encoding="utf-8"
+            )
         return _ok(argv, timeout)
 
     install.install_sync(tmp_path, runner=runner, components=(install.COMPONENT_HARNESS,))
