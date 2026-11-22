@@ -232,6 +232,70 @@ class TestHelper:
         assert defaults.with_default_crew_servers("mine", spec) is spec
 
 
+_APP_KEY = "pinger:ping"
+_APP_ENTRY = {"command": "python3", "args": ["server.py"]}
+
+
+def _install_app(monkeypatch, *, enabled=True):
+    """``kirocrew.json`` mounting one installed app's server, as its registration writes it."""
+    installed = {"mcpServers": {_APP_KEY: {**_APP_ENTRY, "autoApprove": ["*"]}}}
+    monkeypatch.setattr(
+        "kiro_crew.agent_materialization.worker_agent._installed_default_spec", lambda: installed
+    )
+    monkeypatch.setattr(
+        "kiro_crew.agent_materialization.mcp_sources._app_owned_mcp_keys",
+        lambda: {_APP_KEY: enabled},
+    )
+
+
+def test_a_tool_search_agent_gets_the_enabled_app_s_servers(managed, monkeypatch):
+    _install_app(monkeypatch)
+    out = defaults.with_default_crew_servers("mine", {"tools": ["fs_read", "tool_search"]})
+    assert out["mcpServers"] == {
+        "kirocrew-core": _CORE,
+        "kirocrew-cron": _CRON,
+        _APP_KEY: _APP_ENTRY,
+    }
+    assert out["tools"] == [
+        "fs_read",
+        "tool_search",
+        "@kirocrew-core",
+        "@kirocrew-cron",
+        f"@{_APP_KEY}",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("spec", "enabled"),
+    [
+        ({"tools": ["fs_read"]}, True),
+        ({"tools": ["fs_read", "tool_search"], "excludedTools": [f"@{_APP_KEY}"]}, True),
+        ({"tools": ["fs_read", "tool_search"]}, False),
+    ],
+    ids=["no-tool-search", "excluded", "app-disabled"],
+)
+def test_the_app_s_servers_are_not_added(managed, monkeypatch, spec, enabled):
+    _install_app(monkeypatch, enabled=enabled)
+    out = defaults.with_default_crew_servers("mine", spec)
+    assert set(out["mcpServers"]) == {"kirocrew-core", "kirocrew-cron"}
+    assert f"@{_APP_KEY}" not in out["tools"]
+
+
+def test_an_aliased_key_is_not_copied_as_the_app_s(managed, monkeypatch):
+    """A slashed server name reaches ``kirocrew.json`` as an alias another server can hold."""
+    installed = {"mcpServers": {"playwright-mcp": _APP_ENTRY, "kirocrew-core": _APP_ENTRY}}
+    monkeypatch.setattr(
+        "kiro_crew.agent_materialization.worker_agent._installed_default_spec", lambda: installed
+    )
+    monkeypatch.setattr(
+        "kiro_crew.agent_materialization.mcp_sources._app_owned_mcp_keys",
+        lambda: {"playwright-mcp": True, "kirocrew-core": True},
+    )
+    out = defaults.with_default_crew_servers("mine", {"tools": ["fs_read", "tool_search"]})
+    assert out["mcpServers"] == {"kirocrew-core": _CORE, "kirocrew-cron": _CRON}
+    assert "@playwright-mcp" not in out["tools"]
+
+
 # --- KAS: the projected custom agent --------------------------------------------
 
 

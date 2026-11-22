@@ -1118,11 +1118,24 @@ when:
 `"*"` gets the entries only; a per-tool grant such as `@kirocrew-core/skill_search`
 is not widened.
 
-On KAS the added servers' tools are deferred: the model sees them in the loader's
+An agent whose `tools` grants `tool_search` (`tool_search`, `@builtin` or `"*"`,
+and not excluded) also gets the MCP servers of every enabled installed app, the
+same entries Crew's default agent `kirocrew.json` has, under the same rules and
+opt-outs. `excludedTools: ["@<app>:<server>"]` withholds one. A server whose
+declared name has a `/` is not added: `kirocrew.json` keys it by an alias, and an
+alias can be another server's. None of their tools
+is auto-approved: an app's `autoApprove` list is not copied, and you approve each
+call unless your own `allowedTools` already covers it. On KAS Crew keeps none of
+their tools direct, not even one you name one by one: none goes on its
+`neverDefer` list.
+
+On KAS the tools of `kirocrew-core` and `kirocrew-cron` are deferred: the model
+sees them in the loader's
 catalogue and loads one the first time it calls it, as on Crew's default agent,
 so they no longer ride in every request. Only an entry Crew added counts (the
-managed launch, byte for byte); a server your `mcpServers` declares is yours. A
-tool of an added server you name one by one, such as `@kirocrew-core/skill_search`,
+managed launch, byte for byte); a server your `mcpServers` declares is yours. On an
+agent that does not grant `tool_search`, a tool of an added server you name one by
+one, such as `@kirocrew-core/skill_search`,
 stays direct (a whole-server `@kirocrew-core` is deferred, whoever wrote it), and so do `spawn_run`, `spawn_sub_agents`, `spawn_status` and `mcp_server_wait`, also when your `tools` is `"*"` or `@builtin` (which grant the loader), so the agent sees it can start sub-agents without loading a tool first; a tool your `excludedTools` names stays unavailable. Every other tool your spec grants,
 your own servers' included, stays as written. A backend that does not read
 KAS's `neverDefer` list sends them as before.

@@ -5,7 +5,10 @@ or a tool such as AIM installed. Its spec grants what it declares, and the user 
 no practical way to declare Crew's servers in it: their launch command, data-home
 pin and session identity are Crew-internal. So a Crew session on such an agent gets
 :data:`DEFAULT_CREW_SERVERS` added to the spec it runs on, with the managed launch
-(:func:`kiro_crew.agent.managed_mcp_spec_entry`) and an ``@<server>`` grant.
+(:func:`kiro_crew.agent.managed_mcp_spec_entry`) and an ``@<server>`` grant. One
+that grants the ``tool_search`` loader also gets every enabled installed app's
+servers keyed ``<app>:<server>``, the entries Crew's default agent mounts, without
+their ``autoApprove``.
 
 ONE helper, called by both kiro paths, so the two cannot drift:
 
@@ -142,8 +145,31 @@ def _references(tools: list[Any], server: str) -> bool:
     return any(isinstance(t, str) and (t == whole or t.startswith(prefix)) for t in tools)
 
 
+def _app_servers() -> dict[str, dict[str, Any]]:
+    """Each enabled installed app's server as ``kirocrew.json`` mounts it, minus ``autoApprove``.
+
+    Only an unaliased ``<app>:<server>`` key: a server whose declared name has a
+    ``/`` is keyed by an alias, and an alias can be another server's.
+    """
+    from kiro_crew.agent_materialization.mcp_sources import _app_owned_mcp_keys
+    from kiro_crew.agent_materialization.worker_agent import _installed_default_spec
+
+    mounted = (_installed_default_spec() or {}).get("mcpServers")
+    if not isinstance(mounted, dict):
+        return {}
+    owned = _app_owned_mcp_keys()
+    return {
+        key: {field: value for field, value in entry.items() if field != "autoApprove"}
+        for key, entry in mounted.items()
+        if ":" in key and owned.get(key) and isinstance(entry, dict)
+    }
+
+
 def with_default_crew_servers(agent: str | None, spec: dict[str, Any]) -> dict[str, Any]:
     """*spec* with :data:`DEFAULT_CREW_SERVERS` added when *agent* is a custom agent.
+
+    A spec that grants the ``tool_search`` loader also gets :func:`_app_servers`,
+    under the same rules.
 
     Returns *spec* itself when nothing is added, else a new dict. Nothing is added
     on a registry-governed install (:func:`_registry_mode`). For each server:
@@ -172,14 +198,18 @@ def with_default_crew_servers(agent: str | None, spec: dict[str, Any]) -> dict[s
     if declared is not None and not isinstance(declared, dict):
         return spec
     from kiro_crew.agent import managed_mcp_spec_entry
+    from kiro_crew.agent_sdk.tool_search import spec_grants_tool_search
+
+    def wanted(server: str) -> bool:
+        return not opted_out(spec, server) and not (declared and server in declared)
 
     added: dict[str, dict[str, Any]] = {}
     for server in DEFAULT_CREW_SERVERS:
-        if opted_out(spec, server) or (declared and server in declared):
-            continue
-        entry = managed_mcp_spec_entry(server)
+        entry = managed_mcp_spec_entry(server) if wanted(server) else None
         if isinstance(entry, dict):
             added[server] = entry
+    if spec_grants_tool_search(spec):
+        added.update((key, entry) for key, entry in _app_servers().items() if wanted(key))
     if not added:
         return spec
     out = copy_json_document(spec)
