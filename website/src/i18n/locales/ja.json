@@ -438,6 +438,13 @@
       "note_not_sent_not_saved": "メモは Bot に送信されず、このブラウザーにコピーを残せませんでした。今すぐコピーしてください: {{note}}",
       "tab_gone": "Bot のタブが閉じられているため、表示できるライブのページがありません。",
       "app_off": "このアプリはオフになっているため、ブラウザーを表示できません。アプリ一覧でオンにすると、ページがまた表示されます。"
+    },
+    "browserSites": {
+      "add_title": "新しい閲覧サイトを許可しますか？",
+      "add_asked_by": "{{app}} が、自身のエージェントが閲覧できるページに下のサイトを追加するよう求めています。",
+      "add_star": "中の * はどんな文字列にも一致するため、アドレスが当てはまるすべてのページが対象になります。",
+      "add_risk": "許可すると、アプリ自身のエージェントが毎回確認せずに、あなたのブラウザーであなたのログインのまま、これらのページを開き、読み、入力し、クリックできます。信頼できるサイトだけを許可してください。後で削除できます。",
+      "add_allow": "サイトを許可"
     }
   },
   "apps": {
@@ -12079,7 +12086,16 @@
         "installed_needs_newer_host": "インストール済みの {{name}} には新しい {{productName}} が必要です。{{productName}} を更新してください。データは変更されていません。"
       },
       "grants_reconsent_composer_actions": "入力欄ボタン：入力欄の + メニューにこれらのボタンを追加できます。クリックするとアプリのテキストが下書きに挿入されます。アプリは下書きを見ることも送信することもできません。",
-      "grants_reconsent_selection_actions": "選択テキストの操作: チャットの返信で選択したテキストがアプリの項目に渡され、コピーまたは開くための結果を返せます。"
+      "grants_reconsent_selection_actions": "選択テキストの操作: チャットの返信で選択したテキストがアプリの項目に渡され、コピーまたは開くための結果を返せます。",
+      "browser_sites_list_title": "閲覧サイト",
+      "browser_sites_list_hint": "このアプリ自身のエージェントが閲覧できるページです。削除したサイトはエージェントの次の操作から無効になります。",
+      "browser_sites_source_app": "アプリから",
+      "browser_sites_source_owner": "あなたが追加",
+      "browser_sites_status_approved": "許可済み",
+      "browser_sites_status_pending": "承認待ち",
+      "browser_sites_status_disabled": "停止中",
+      "browser_sites_remove": "削除",
+      "browser_sites_remove_failed": "サイトを削除できませんでした：{{error}}"
     },
     "appPage": {
       "loading_app": "アプリを読み込み中…",

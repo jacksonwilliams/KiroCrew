@@ -7775,7 +7775,8 @@ on an installed app's `credentialMasks` (§37), `permissions.chatLaunch` and
 `useBrowserMedia` (§45), and `ctx.embed`'s batch members; level 11 adds the SDK's `BrowserView`,
 `useBrowserView` and `useBrowserCoords` (RFC app-sdk-browser, step 1c) and the SDK's
 `appWebOriginStatus` (§18k); level 12 adds `permissions.kiroOperations`, its route and
-`ctx.kiro_call` (§47), and the SDK's `SessionChanges` and `DiffView` (§18l). Several seams share level 7,
+`ctx.kiro_call` (§47), and the SDK's `SessionChanges` and `DiffView` (§18l); level 13 adds
+`/api/apps/<name>/browser-sites` and the SDK's `useBrowserSites` (§45). Several seams share level 7,
 three share level 8, and the open batch that level 10 starts shares level 10, so an app that needs one
 feature-detects it (the manifest key or attribute, or the SDK export), never the level alone. An app reads `ctx.sdk_level` or the SDK export to detect an
 older host and degrade, instead of failing on a missing attribute.
@@ -10327,6 +10328,37 @@ entries it returns, the app is enabled and `third_party_ceiling_closed` admits i
 disable, an uninstall, a withdrawn trust grant or an update that drops a site ends the
 grant at the next call.
 
+**The owner's own edits (seam level 13).** The owner may add a site the app never
+declared, remove one, or turn one off (`browser_sites.site_change`). They live in the
+gateway-only record `member-records/app-browser-sites/<app>.json`
+(`protected_app_state.read_owner_browser_sites`, keys `added`, `disabled`, `removed`),
+never in the app's tree. The record names its install (`installedAt`), so it reads as empty for another install, and an uninstall, a fresh install and a new registration under the name remove it; the edit holds the app's record lock across the install check and the write. `app_browser_sites` returns the
+approved declared entries the owner did not remove, plus the added ones, less the turned-off
+ones, under the same enabled and trusted checks; an unreadable record grants nothing. An
+added entry meets `entry_refusal`, the rule a declared one meets (https only; no bare `*`,
+wildcard host, public suffix, IP, `localhost`, port or user info), and the owner may add at
+most `MAX_OWNER_SITES` (32). `add` of a declared entry approves it and of a turned-off one
+turns it back on; a removed declared entry stays removed across updates, and the owner's
+ruled entries are not staged on the detail page. A removal or turn-off ends at the next op,
+as a withdrawn approval does: the op route reads the list fresh and blanks a tab on a site
+no longer listed.
+
+`GET /api/apps/{name}/browser-sites` (`apps/browser_sites_routes.py`) answers
+`{sites: [{site, source: app|owner, status: approved|pending|disabled}], active}` to the
+owner, the app's own token and an internal caller. `POST` with `{action: add|remove|disable,
+site}` is owner-only: an app token is `app_token_forbidden`, an internal caller (an agent's
+MCP tools, kiro-cli) is `dashboard_session_required`, any other dashboard session is
+`owner_only` (`require_owner_dashboard_request`), all 403 and audited. `browser-sites` is a
+reserved core segment (`CORE_APP_ROUTE_SEGMENTS`). The SDK's `useBrowserSites`
+(`website/src/app-sdk/browserSites.ts`) reads the list, applies `requestRemove` and
+`requestDisable` at once, and draws the dashboard's own dialog (`askAppConfirm`) before
+`requestAdd` sends anything, naming the site and what the agent may then do. That dialog
+is a guardrail, not a boundary: an app page runs in the dashboard document with the
+owner's session and could call the route without it, as it can call `/enable`
+(`docs/architecture/app-platform-trust-model.md`). The detail page lists every site with a
+Remove (`pages/AppDetailBrowserSites.tsx`). A refused off-list request tells the agent
+which sites it may open (`site_not_allowed`), so it can look on a site the owner added.
+
 **Two enforcement points.** The tool gate's `app-browser-sites` row
 (`hooks._tier_app_browser_sites`, its conditions in `browser_sites.gate_grants` imported at call time, after every deny row and governance) auto-approves a
 call only when the caller is the app's own dashboard slot (`facts.app`, the slot's
@@ -10398,7 +10430,9 @@ Writers: `apps/browser_sites.py`, `apps/manifest_sections.py` (`Permissions.brow
 `hooks.py` (`GATE_TIERS`), `dashboard/handlers/browser_ops.py`,
 `dashboard/handlers/browser_media.py`, `browser_harness/media.py`,
 `browser_harness/snapshot_walker.js` (`media`), `website/src/app-sdk/browserMedia.ts`,
-`website/src/pages/AppDetailPage.tsx`.
+`website/src/pages/AppDetailPage.tsx`, `apps/browser_sites_routes.py`,
+`apps/protected_app_state.py`, `apps/manager_uninstall.py`,
+`website/src/app-sdk/browserSites.ts`, `website/src/pages/AppDetailBrowserSites.tsx`.
 
 ## 46. An app's grant to the browser tabs of its own chats (RFC #38322, step 1a)
 
