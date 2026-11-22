@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from kiro_crew.messaging.dispatch_contract import Asker, RendererSource, TurnOutcome, Verdict
 from kiro_crew.messaging.renderer import Renderer
+from kiro_crew.messaging.turn_ceiling import generated_turn_pending
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from kiro_crew.messaging.dispatch import ChannelTurns
@@ -41,7 +42,8 @@ async def run_admitted(
     return await run_channel_turn(
         session_key=asker.session_key,
         text=text,
-        automation=monitor is not None,
+        # A plain nudge carries no monitor but runs inside ``generated_turn``.
+        automation=monitor is not None or generated_turn_pending(),
         run=lambda: turns._run(asker, text, source, **kwargs),
         refused=_refused,
     )

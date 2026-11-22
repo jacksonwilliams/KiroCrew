@@ -151,6 +151,16 @@ def generated_turn() -> Iterator[None]:
         _generated_turn.reset(token)
 
 
+def generated_turn_pending() -> bool:
+    """Whether a generated turn's exemption is in scope and unspent, without spending it.
+
+    Fair admission asks before the turn's ceiling gate runs, so a queue drain's
+    replayed messages, which follow the spent gate, are not read as generated.
+    """
+    marker = _generated_turn.get()
+    return marker is not None and marker.unspent
+
+
 def _spend_generated_turn() -> bool:
     """Spend the exemption if one is in scope, reporting whether it applied."""
     marker = _generated_turn.get()
