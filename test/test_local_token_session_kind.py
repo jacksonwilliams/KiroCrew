@@ -131,3 +131,34 @@ async def test_local_session_cookie_first_use_stays_unbound(
     elsewhere = await middleware(_make_request(remote="127.0.0.2", **fields), _ok_handler)
     assert elsewhere.status == 200
     assert bound == []
+
+
+@pytest.mark.asyncio
+async def test_an_app_backend_is_refused_a_session_and_still_gets_its_link(
+    fake_sel, owner_process, monkeypatch
+) -> None:
+    """The refusal is for ``kind=session`` alone, and nothing is signed for it."""
+    monkeypatch.setattr(auth, "_verified_host_process", lambda _pid: False)
+    monkeypatch.setattr(
+        auth, "_gateway_spawned_app_backend", lambda pid: "demo-app" if pid == _PEER_PID else None
+    )
+    signed: list = []
+    sign = core_mod.generate_token
+
+    def record(*args, **kwargs):
+        signed.append(kwargs)
+        return sign(*args, **kwargs)
+
+    monkeypatch.setattr(core_mod, "generate_token", record)
+    refused = await _mint({"kind": "session"})
+    assert (refused.status, json.loads(refused.body)["code"]) == (
+        403,
+        "session_kind_refused_for_app",
+    )
+    assert signed == []
+    row = fake_sel.log_api_access.call_args.kwargs
+    assert (row["outcome"], row["resources"]) == ("denied", "session-kind-app-backend app=demo-app")
+    link = await _mint({})
+    assert link.status == 200
+    assert validate_token(json.loads(link.body)["token"])[:2] == (True, "owner-1")
+    assert len(signed) == 1

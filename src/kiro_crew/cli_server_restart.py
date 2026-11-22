@@ -1079,24 +1079,18 @@ def _restart(cli_port: int | None = None) -> None:
         sys.exit(1)
 
     # Before anything is stopped: the replacement repeats a live gateway's
-    # --headless, and a live gateway whose argv cannot be established refuses,
-    # never a guess.
+    # --headless. A live gateway whose argv cannot be established is restarted
+    # the way a restart that reads no mode restarts it, with one warning line:
+    # an ordinary gateway never loses its restart to this read.
     headless = live_gateway_headless(port)
     if headless is None:
-        sel().log_api_access(
-            caller="cli",
-            operation="gateway_restart",
-            outcome="denied",
-            source="cli",
-            resources=f"port={port} reason=launch_mode_unreadable",
-        )
+        headless = False
         print(
-            "❌ Cannot tell how the Kiro Crew process holding this data home was started; "
-            "nothing was stopped. Try again, or run kirocrew stop and then "
-            "kirocrew gateway --headless, or kirocrew gateway for one with the dashboard.",
+            "⚠️  Could not read how the running gateway was started, so this restart "
+            "starts it with the dashboard. If it was headless, run kirocrew stop and "
+            "then kirocrew gateway --headless.",
             file=sys.stderr,
         )
-        sys.exit(1)
 
     # No service active — bounce the foreground gateway and detach a fresh one.
     # Reuse _stop() for the SIGTERM path so behavior stays in sync if _stop

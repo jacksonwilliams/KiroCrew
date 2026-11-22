@@ -494,11 +494,16 @@ Pinned by `test_crew_api_bearer.py` and, for the direct listener,
 `test_shared_crew_tailnet_direct.py`.
 
 A client with no cookie jar gets a session from `GET /api/token/local?kind=session`
-(`kirocrew token --bearer`). The parameter changes only the token's kind: the three
-gates of that route are the same, the lifetime is the same `ttl`, and the token is
-never registered as a link, so it is refused in a `?token=`
-(`test_local_token_session_kind.py`). The same caller could already get that session
-by opening its link once and reading the cookie. Only a credential presented as a
+(`kirocrew token --bearer`). The parameter changes the token's kind: the three
+gates of that route (loopback or a same-principal unix peer, `X-Local-Secret`, the
+local-owner process check) are the same, the lifetime is the same `ttl`, and the
+token is never registered as a link, so it is refused in a `?token=`
+(`test_local_token_session_kind.py`). One caller passes those gates and is still
+refused this kind: a process the provenance check attributes to an app backend
+gets `403` with `code: session_kind_refused_for_app`, a `denied` SEL row
+(`session-kind-app-backend app=<name>`), and no token is signed. Its link mint is
+unchanged. A host process could already get that session by opening its link once
+and reading the cookie. Only a credential presented as a
 Crew API bearer takes a first-use pin: on its first authenticated request,
 `_check_pin(..., bearer=True)` binds an unbound bearer through `bind_token_peer` to
 the same peer key as a link exchange, the verified tailnet identity or

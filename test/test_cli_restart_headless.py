@@ -15,10 +15,10 @@ from kiro_crew.config.paths import config_dir
 from kiro_crew.gateway_lock import LockProbeError
 from kiro_crew.testing.ids import UNALLOCATABLE_PID
 
-_REFUSAL = (
-    "❌ Cannot tell how the Kiro Crew process holding this data home was started; "
-    "nothing was stopped. Try again, or run kirocrew stop and then "
-    "kirocrew gateway --headless, or kirocrew gateway for one with the dashboard.\n"
+_WARNING = (
+    "⚠️  Could not read how the running gateway was started, so this restart "
+    "starts it with the dashboard. If it was headless, run kirocrew stop and "
+    "then kirocrew gateway --headless.\n"
 )
 
 #: What ``lock_holder`` raises when the lock is held and no pid can be named: a
@@ -121,13 +121,12 @@ def replacement_argv(restart):
     return spawned.call_args.args[0]
 
 
-def assert_refused(restart, capsys):
-    with pytest.raises(SystemExit) as exc:
-        cli_server._restart(7000)
-    assert exc.value.code == 1
-    assert capsys.readouterr() == ("", _REFUSAL)
-    restart[0].assert_not_called()
-    restart[1].assert_not_called()
+def assert_warned_and_restarted_ordinary(restart, capsys):
+    """The unreadable mode costs one stderr line; the stop and the spawn still run."""
+    assert "--headless" not in replacement_argv(restart)
+    assert capsys.readouterr().err == _WARNING
+    (audit,) = cli_server.sel.return_value.log_api_access.call_args_list
+    assert audit.kwargs["outcome"] == "allowed"
 
 
 _WIN_PY = '"C:\\Program Files\\Python312\\python.exe"'
@@ -192,22 +191,37 @@ def test_an_ordinary_holder_is_restarted_ordinary(restart, holder, argv):
         ["kirocrew", "gateway", "--help"],
     ],
 )
-def test_an_unreadable_holder_refuses_before_stop_or_spawn(restart, holder, capsys, argv):
+def test_an_unreadable_holder_is_restarted_ordinary_with_a_warning(restart, holder, capsys, argv):
     holder.argv = argv
-    assert_refused(restart, capsys)
+    assert_warned_and_restarted_ordinary(restart, capsys)
     assert holder.reads == [UNALLOCATABLE_PID]  # read once, no retry
 
 
-def test_the_refusal_is_audited(restart, holder, capsys):
-    holder.argv = None
-    assert_refused(restart, capsys)
-    cli_server.sel.return_value.log_api_access.assert_called_once_with(
-        caller="cli",
-        operation="gateway_restart",
-        outcome="denied",
-        source="cli",
-        resources="port=7000 reason=launch_mode_unreadable",
-    )
+@pytest.mark.parametrize(
+    "argv",
+    [
+        # The PowerShell read failed, timed out, or gave a line that does not split
+        # (``test_process_argv_splits_the_windows_command_line``).
+        None,
+        # A quote after ``gateway`` in a Windows split.
+        ["kirocrew.exe", "gateway", "--seed", '"a', 'b"', "--headless"],
+    ],
+)
+def test_a_windows_gateway_whose_command_line_is_unreadable_still_restarts(
+    restart, holder, monkeypatch, capsys, argv
+):
+    """Windows: the lock hides the stamp, the run record names the pid, the read fails."""
+    monkeypatch.setattr(platform_compat, "IS_WINDOWS", True)
+    holder.holder = _HELD_UNNAMED
+    holder.record = UNALLOCATABLE_PID + 5
+    holder.argv = argv
+    assert_warned_and_restarted_ordinary(restart, capsys)
+    assert holder.reads == [UNALLOCATABLE_PID + 5]
+
+
+def test_a_readable_ordinary_gateway_restarts_without_a_warning(restart, holder, capsys):
+    replacement_argv(restart)
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.parametrize("windows", [True, False])
@@ -239,25 +253,30 @@ def test_a_held_unnamed_lock_reads_the_fresh_run_record(restart, holder, headles
     assert holder.reads == [UNALLOCATABLE_PID + 5]
 
 
-def test_a_held_unnamed_lock_without_a_fresh_record_refuses(restart, holder, capsys):
+def test_a_held_unnamed_lock_without_a_fresh_record_restarts_ordinary(restart, holder, capsys):
+    """Windows before the gateway has written its run record, or when it never does."""
     holder.holder = _HELD_UNNAMED
     holder.record = None
-    assert_refused(restart, capsys)
+    assert_warned_and_restarted_ordinary(restart, capsys)
     assert holder.reads == []
 
 
 @pytest.mark.parametrize("state", sorted(_NOT_HELD))
-def test_an_indeterminate_probe_beside_our_listener_refuses(restart, holder, capsys, state):
+def test_an_indeterminate_probe_beside_our_listener_restarts_ordinary(
+    restart, holder, capsys, state
+):
     holder.holder = _NOT_HELD[state]
     holder.ours = True
-    assert_refused(restart, capsys)
+    assert_warned_and_restarted_ordinary(restart, capsys)
     assert holder.reads == []
 
 
-def test_an_indeterminate_probe_without_a_listener_lookup_refuses(restart, holder, capsys):
+def test_an_indeterminate_probe_without_a_listener_lookup_restarts_ordinary(
+    restart, holder, capsys
+):
     holder.holder = _NOT_HELD["unopenable"]
     holder.lookup = False
-    assert_refused(restart, capsys)
+    assert_warned_and_restarted_ordinary(restart, capsys)
 
 
 @pytest.mark.parametrize("state", sorted(_NOT_HELD))
@@ -291,34 +310,6 @@ def test_another_homes_listener_on_the_port_does_not_set_the_mode(
     assert ("--headless" in replacement_argv(restart)) is headless
     assert holder.probes == [config_dir()]
     assert holder.reads == [UNALLOCATABLE_PID]
-
-
-def test_a_when_idle_restart_refused_here_reopens_admission(restart, holder, monkeypatch, capsys):
-    from kiro_crew import cli_restart_idle as idle_cli
-    from kiro_crew import cli_server_stop
-    from kiro_crew.service import controller as service_controller
-
-    releases: list[int] = []
-
-    def ask(port, *, service_only=False, commit=False, release=False):
-        if release:
-            releases.append(port)
-        return idle_cli._Verdict("idle")
-
-    monkeypatch.setattr(idle_cli, "_ask_gate", ask)
-    monkeypatch.setattr(idle_cli, "resolve_client_port", lambda port: port)
-    monkeypatch.setattr(idle_cli, "_service_scopes_running", lambda: 0)
-    monkeypatch.setattr(idle_cli, "_service_active", lambda: False)
-    monkeypatch.setattr(service_controller, "service_alias_holder", lambda: None)
-    monkeypatch.setattr(cli_server_stop, "desktop_app_supervisor", lambda *a, **k: None)
-    holder.argv = None
-    with pytest.raises(SystemExit) as exc:
-        idle_cli._restart_when_idle(7000, max_wait_secs=0)
-    assert exc.value.code == 1
-    assert releases == [7000]
-    assert capsys.readouterr().err == _REFUSAL
-    restart[0].assert_not_called()
-    restart[1].assert_not_called()
 
 
 def test_the_restart_parser_is_mains_gateway_parser(monkeypatch):

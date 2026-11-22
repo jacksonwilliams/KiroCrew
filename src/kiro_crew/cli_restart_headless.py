@@ -5,7 +5,8 @@ parses the part after ``gateway`` with the gateway command's real arguments
 (``cli.add_gateway_arguments``), so an abbreviation such as ``--headl`` counts and
 the text ``--headless`` inside another argument's value does not. Whenever a
 gateway of this home is alive and its arguments cannot be established, the answer
-is ``None`` and the restart refuses.
+is ``None``: the restart warns and goes on without the flag, as a restart that
+reads no mode does.
 """
 
 import argparse

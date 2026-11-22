@@ -8,9 +8,13 @@ import pytest
 from aiohttp import web
 from aiohttp.test_utils import make_mocked_request
 
+from kiro_crew.agent_discovery_parts.spec_fields import AgentInfo
 from kiro_crew.dashboard import crew_api_models as models
+from kiro_crew.dashboard.handlers.core import _SENSITIVE_MASK
+from kiro_crew.testing.synthetic_credentials import github_classic
 
 OWNER = "U_OWNER"
+SECRET = github_classic(seed=13)
 
 
 def _request(*, app_claim: str = "") -> web.Request:
@@ -28,7 +32,10 @@ def _catalog(monkeypatch, bots: list[str], templates: list[tuple[str, str]]) -> 
     monkeypatch.setattr(
         models,
         "list_agents",
-        lambda: [SimpleNamespace(name=name, description=text) for name, text in templates],
+        lambda: [
+            AgentInfo(name=name, filename=f"{name}.json", description=text, model="auto")
+            for name, text in templates
+        ],
     )
 
 
@@ -90,4 +97,33 @@ def test_a_bot_shadows_a_template_of_its_name_and_an_unsafe_name_is_left_out(mon
     assert [(row["id"], row["crew"]) for row in models.usable_models()] == [
         ("scout", {"kind": "bot", "name": "scout"}),
         ("writer", {"kind": "agent", "name": "writer"}),
+    ]
+
+
+def test_a_credential_shaped_template_description_is_masked(monkeypatch) -> None:
+    _catalog(monkeypatch, [], [("atlas", f"key {SECRET}")])
+    assert [row["crew"] for row in models.usable_models()] == [
+        {"kind": "agent", "name": "atlas", "description": _SENSITIVE_MASK}
+    ]
+
+
+def test_a_template_whose_name_would_be_masked_is_left_out(monkeypatch) -> None:
+    _catalog(monkeypatch, [], [(SECRET, "benign"), ("reviewer", "benign")])
+    assert [row["id"] for row in models.usable_models()] == ["reviewer"]
+
+
+def test_a_bot_whose_name_would_be_masked_is_left_out(monkeypatch) -> None:
+    _catalog(monkeypatch, [SECRET, "scout"], [])
+    assert [row["id"] for row in models.usable_models()] == ["scout"]
+
+
+def test_an_ordinary_template_row_is_unchanged(monkeypatch) -> None:
+    _catalog(monkeypatch, [], [("reviewer", "reviews pull requests")])
+    assert models.usable_models() == [
+        {
+            "id": "reviewer",
+            "object": "model",
+            "owned_by": "crew",
+            "crew": {"kind": "agent", "name": "reviewer", "description": "reviews pull requests"},
+        }
     ]
